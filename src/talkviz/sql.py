@@ -92,6 +92,9 @@ def lint(sql: str, manifest: Manifest) -> None:
         raise QueryRejected(
             f"{forbidden.key.upper()} is not allowed; write a plain SELECT query."
         )
+    for function in tree.find_all(exp.Anonymous):
+        if function.name.lower() in _FORBIDDEN_FUNCTIONS:
+            raise QueryRejected(f"The function {function.name}() is not allowed.")
     local_names = {cte.alias for cte in tree.find_all(exp.CTE)}
     for table in tree.find_all(exp.Table):
         if not isinstance(table.this, exp.Identifier):
@@ -187,3 +190,6 @@ _FORBIDDEN = (
     exp.Command,
     exp.Into,
 )
+# Functions that reveal the host rather than the data: settings (which include
+# local paths), environment variables, and the query text itself.
+_FORBIDDEN_FUNCTIONS = {"current_setting", "getenv", "current_query"}
