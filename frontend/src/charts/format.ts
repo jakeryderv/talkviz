@@ -45,7 +45,8 @@ export function cell(value: Cell, column: Column, asCategory = false): string {
   if (typeof value === "number") {
     return asCategory && Number.isInteger(value) ? String(value) : number(value);
   }
-  return String(value);
+  // Category labels read better without code-style underscores ("air_bags").
+  return asCategory ? String(value).replace(/_/g, " ") : String(value);
 }
 
 export function seriesColor(index: number): string {

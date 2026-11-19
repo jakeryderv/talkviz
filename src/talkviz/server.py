@@ -8,10 +8,9 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from pydantic_ai.models import Model
 
 from talkviz import llm
-from talkviz.llm import Exchange
+from talkviz.llm import Exchange, Model
 from talkviz.sources import Source, list_sources, load_source
 from talkviz.sql import QueryRejected, check_and_run
 from talkviz.store import Chat, Event, Run, Store
@@ -74,6 +73,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
     on the first turn so the app starts without an API key."""
     app = FastAPI(title="talkviz")
     app.state.model = model
+    app.state.speaker = None  # a separate model for replies, if one is configured
     app.state.store = store or Store()
 
     def get_store() -> Store:
@@ -83,6 +83,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
         if app.state.model is None:
             try:
                 app.state.model = llm.openrouter()
+                app.state.speaker = llm.speech_openrouter()
             except Exception as error:  # whatever the provider raises
                 raise HTTPException(503, f"No model available: {error}") from error
         return app.state.model
@@ -156,6 +157,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     con,
                     workspace,
                     _exchanges(history),
+                    speaker=app.state.speaker,
                 )
         except llm.ModelFailed as error:
             reply = "Sorry, I couldn't work that out. Try asking another way."

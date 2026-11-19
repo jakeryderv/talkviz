@@ -116,7 +116,8 @@ def test_rerunning_a_chart_adds_a_run_but_nothing_to_the_feed(source):
     first = app.post(f"/api/chats/{chat_id}/turns", json={"text": "sales?"}).json()
     again = app.post(f"/api/chats/{chat_id}/charts/c1/run").json()
     assert again["run"]["id"] > first["charts"][0]["run"]["id"]
-    assert again["run"]["rows"] == first["charts"][0]["run"]["rows"]
+    # The query has no ORDER BY, so row order can differ between runs.
+    assert sorted(again["run"]["rows"]) == sorted(first["charts"][0]["run"]["rows"])
     assert len(app.get(f"/api/chats/{chat_id}").json()["events"]) == 3
     assert app.post(f"/api/chats/{chat_id}/charts/c9/run").status_code == 404
 
