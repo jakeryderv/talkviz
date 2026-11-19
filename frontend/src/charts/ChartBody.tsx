@@ -18,10 +18,19 @@ function Plot({ fig }: { fig: Figure }) {
       live = false;
     };
   }, [fig]);
+  // Follow the pane's size, which changes when charts are shown side by side.
   useEffect(() => {
     const element = ref.current;
+    if (!element) return;
+    const watch = new ResizeObserver(() => {
+      plotly().then((Plotly) => {
+        if (element.querySelector(".plot-container")) Plotly.Plots.resize(element);
+      });
+    });
+    watch.observe(element);
     return () => {
-      if (element) plotly().then((Plotly) => Plotly.purge(element));
+      watch.disconnect();
+      plotly().then((Plotly) => Plotly.purge(element));
     };
   }, []);
   return <div ref={ref} className="h-full w-full" />;

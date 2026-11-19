@@ -159,3 +159,22 @@ def test_what_the_router_cannot_settle_goes_to_the_planner(manifest, con, found)
     # A view that does not fit is passed on, so the planner need not rediscover it.
     told = "They are asking to draw c1 ('Sales by category') as 'line'" in model.sent(0)
     assert told == (found is not None and found.kind == "line")
+
+
+def test_several_charts_are_shown_together(manifest, con):
+    workspace = Workspace(charts=[CHART, OTHER])
+    found = Shortcut("show_chart", ("c1", "c2"))
+    turn = take_turn(
+        Scripted(),
+        "both side by side",
+        manifest,
+        con,
+        workspace,
+        [],
+        router=Fixed(found),
+    )
+    assert [(run.op, run.chart.id) for run in turn.runs] == [
+        ("show_chart", "c1"),
+        ("show_chart", "c2"),
+    ]
+    assert turn.reply == "Here are Sales by category and Orders by month, side by side."
