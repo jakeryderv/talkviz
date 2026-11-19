@@ -1,0 +1,58 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+/* Design tokens. The interface and the charts both read from these; the
+   values come from design/talkviz-brand-guide.md. */
+@theme static {
+  --color-bg: #09090b;
+  --color-surface: #18181b;
+  --color-raised: #27272a;
+  --color-line: #27272a;
+  --color-line-strong: #3f3f46;
+
+  --color-ink-strong: #fafafa;
+  --color-ink: #d4d4d8;
+  --color-ink-muted: #a1a1aa;
+  --color-ink-faint: #71717a;
+
+  --color-primary: #3b82f6;
+  --color-primary-bright: #60a5fa;
+  --color-critical: #f87171;
+  --color-warning: #fab219;
+
+  /* Chart series, in fixed order. Checked for colour-blind separation and
+     contrast on the surface colour; do not reorder without re-checking. */
+  --color-series-1: #3b82f6;
+  --color-series-2: #d95926;
+  --color-series-3: #199e70;
+  --color-series-4: #c98500;
+  --color-series-5: #d55181;
+  --color-series-6: #0ca30c;
+  --color-series-7: #9085e9;
+  --color-series-8: #e66767;
+
+  --font-sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --animate-wave: wave 1.1s ease-in-out infinite;
+  @keyframes wave {
+    0%, 100% { transform: scaleY(0.35); }
+    50% { transform: scaleY(1); }
+  }
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  color-scheme: dark;
+}
+* { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }
+:focus-visible { outline: 2px solid var(--color-primary-bright); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

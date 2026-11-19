@@ -68,6 +68,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      # The interface is built into src/talkviz/web, which the wheel includes.
+      - run: npm ci && npm run build
+        working-directory: frontend
       - uses: astral-sh/setup-uv@v10.3.3
       - run: uv build
+      - name: Check the wheel contains the interface
+        run: unzip -l dist/*.whl | grep -q "talkviz/web/index.html"
       - uses: pypa/gh-action-pypi-publish@release/v1

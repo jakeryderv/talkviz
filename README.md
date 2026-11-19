@@ -4,8 +4,8 @@ Talk to your data and see it charted. Ask a question in plain language;
 talkviz writes a read-only SQL query, checks it, runs it, picks a chart, and
 answers in a sentence or two.
 
-> Early development. The query engine and command line work today. The web
-> interface and voice are not built yet.
+> Early development. The query engine, command line, and web app (typed
+> questions) work today. Voice is not built yet.
 
 ## How it stays grounded
 
@@ -41,6 +41,11 @@ uv run talkviz add path/to/data.duckdb path/to/manifest.yaml
 uv run talkviz ask "How many orders were there each month?"
 uv run talkviz ask          # no question: start a conversation
 ```
+
+`talkviz serve` opens the web app at http://127.0.0.1:8321: chats on the left,
+the chart in focus in the centre, the conversation below it, and the chat's
+charts on the right. Chats, charts, and every result are kept in a local
+SQLite file.
 
 In a conversation you can refer back to charts: "make that a bar chart",
 "only since 2020", "show the first one again".
@@ -87,6 +92,14 @@ uv sync
 uv run pre-commit install   # once per clone
 uv run pytest
 uv run ruff check . && uv run ruff format --check . && uv run ty check
+```
+
+The interface is a React app in `frontend/`, built into the Python package:
+
+```sh
+cd frontend && npm install
+npm run build   # into src/talkviz/web, served by `talkviz serve`
+npm run dev     # or: live reload, with `talkviz serve` running alongside
 ```
 
 The hooks run ruff, ty, and a lockfile check on commit, and the tests on

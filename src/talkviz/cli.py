@@ -34,6 +34,10 @@ def main() -> None:
     evaluation.add_argument("eval_file", type=Path)
     _common(evaluation)
 
+    serve = commands.add_parser("serve", help="run the web app")
+    serve.add_argument("--port", type=int, default=8321)
+    serve.add_argument("--host", default="127.0.0.1")
+
     args = parser.parse_args()
     load_dotenv(find_dotenv(usecwd=True))
     try:
@@ -55,6 +59,13 @@ def _run(args: argparse.Namespace) -> None:
         print(f"added {source.name} ({source.database})")
     elif args.command == "sources":
         print("\n".join(list_sources()) or "no sources; add one with `talkviz add`")
+    elif args.command == "serve":
+        import uvicorn  # slow import, only needed here
+
+        from talkviz.server import create_app
+
+        print(f"talkviz is running at http://{args.host}:{args.port}")
+        uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning")
     elif args.command == "ask":
         _ask(args)
     elif args.command == "eval":

@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from talkviz.sql import QueryResult
 
 MAX_BARS = 60
-MAX_SERIES = 12
+MAX_SERIES = 8  # the interface has eight series colours
 
 
 class _Spec(BaseModel):
