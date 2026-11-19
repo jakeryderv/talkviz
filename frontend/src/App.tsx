@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Chart, type Chat, type ChatView, type Kind, type ModelInfo, type Settings, type SettingsInfo, type Source, type Voices } from "./api";
 import { ChartList, Feed, Sidebar, Workspace } from "./Panels";
 import { SettingsPanel, summary } from "./Settings";
+import { useStored } from "./ui";
 
 const MAX_SHOWN = 4;
+const RAIL = 44; // px, a collapsed side column
+const FEED_SHARE = 0.34; // of the height, for the conversation
 
 function recalled(): "chat" | "voice" {
   try {
@@ -28,6 +31,17 @@ export function App() {
   // Settings chosen for a chat that has not been started yet.
   const [draft, setDraft] = useState<Settings | null>(null);
   const [voices, setVoices] = useState<Voices | null>(null);
+  // How the screen is divided, remembered in this browser.
+  const [chatsHidden, setChatsHidden] = useStored("talkviz.chatsHidden", false);
+  const [listHidden, setListHidden] = useStored("talkviz.listHidden", false);
+  const [feedShare, setFeedShare] = useStored("talkviz.feedShare", FEED_SHARE);
+  const main = useRef<HTMLElement>(null);
+  // Dragging the divider gives the conversation more or less of the height.
+  const drag = (e: React.PointerEvent) => {
+    const box = main.current?.getBoundingClientRect();
+    if (!box || e.buttons !== 1) return;
+    setFeedShare(Math.min(0.75, Math.max(0.18, (box.bottom - e.clientY) / box.height)));
+  };
   const [mode, setMode] = useState<"chat" | "voice">(recalled);
   // The reply being read aloud, if one is.
   const speaking = useRef<HTMLAudioElement | null>(null);
@@ -72,8 +86,14 @@ export function App() {
   // The address holds the open chat and its charts (#chat/c1+c2), so a reload
   // or a bookmark comes back to the same place.
   useEffect(() => {
-    const [chatId, charts] = location.hash.slice(1).split("/");
-    if (chatId) open(chatId, charts?.split("+").filter(Boolean));
+    const follow = () => {
+      const [chatId, charts] = location.hash.slice(1).split("/");
+      if (chatId) open(chatId, charts?.split("+").filter(Boolean));
+    };
+    follow();
+    // Also when the address is edited or a link to another chat is followed.
+    window.addEventListener("hashchange", follow);
+    return () => window.removeEventListener("hashchange", follow);
   }, [open]);
   useEffect(() => {
     const hash = view ? `#${view.chat.id}${shown.length ? `/${shown.join("+")}` : ""}` : "";
@@ -195,13 +215,23 @@ export function App() {
   const settings = view?.settings ?? draft ?? info?.defaults;
 
   return (
-    <div className="grid h-full grid-cols-[240px_minmax(0,1fr)_260px]">
-      <Sidebar chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} onSettings={() => setSettingsOpen("defaults")} />
-      <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_minmax(180px,32%)]">
+    <div className="grid h-full" style={{ gridTemplateColumns: `${chatsHidden ? RAIL : 240}px minmax(0,1fr) ${listHidden ? RAIL : 260}px` }}>
+      <Sidebar collapsed={chatsHidden} onCollapse={setChatsHidden} chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} onSettings={() => setSettingsOpen("defaults")} />
+      <main ref={main} className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)]" style={{ gridTemplateRows: `minmax(0,1fr) 5px minmax(150px,${feedShare * 100}%)` }}>
         <Workspace charts={charts} all={view?.charts ?? []} source={source} busy={pending !== null} onAsk={say} onDraw={draw} onReset={reset} onClose={toggle} />
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize the conversation"
+          title="Drag to resize; double-click to reset"
+          onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
+          onPointerMove={drag}
+          onDoubleClick={() => setFeedShare(FEED_SHARE)}
+          className="cursor-row-resize touch-none border-t border-line bg-surface hover:border-primary hover:bg-primary/30 active:border-primary active:bg-primary/40"
+        />
         <Feed events={view?.events ?? []} pending={pending} error={error} running={settings ? summary(settings, mode) : null} mode={mode} chatId={view?.chat.id ?? null} onMode={choose} onInterrupt={hush} onError={setError} onSay={say} onFocus={show} onSettings={() => setSettingsOpen("chat")} />
       </main>
-      <ChartList charts={view?.charts ?? []} shown={shown} full={shown.length >= MAX_SHOWN} onFocus={show} onToggle={toggle} />
+      <ChartList collapsed={listHidden} onCollapse={setListHidden} charts={view?.charts ?? []} shown={shown} full={shown.length >= MAX_SHOWN} onFocus={show} onToggle={toggle} />
       {settingsOpen === "defaults" && info && (
         <SettingsPanel settings={info.defaults} info={info} models={models} voices={voices} chat={null} onSave={saveSettings} onClose={() => setSettingsOpen(null)} />
       )}

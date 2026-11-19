@@ -33,7 +33,7 @@ function Plot({ fig }: { fig: Figure }) {
       plotly().then((Plotly) => Plotly.purge(element));
     };
   }, []);
-  return <div ref={ref} className="h-full w-full" />;
+  return <div ref={ref} className="absolute inset-0" />;
 }
 
 /** Draws one view of a chart's result. */

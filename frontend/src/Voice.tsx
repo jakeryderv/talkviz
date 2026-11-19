@@ -175,7 +175,7 @@ export function VoiceBar(props: {
       }}
       onPointerUp={stop}
       onPointerCancel={stop}
-      className={`relative h-[42px] min-w-0 flex-1 cursor-pointer touch-none rounded-md border bg-bg select-none ${phase === "listening" ? "border-primary" : "border-line-strong"}`}
+      className="relative h-11 cursor-pointer touch-none rounded-t-xl select-none"
     >
       <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
       <span className={`pointer-events-none absolute inset-0 flex items-center justify-center text-sm ${blocked ? "text-warning" : phase === "listening" ? "sr-only" : "text-ink-muted"}`} aria-live="polite">
