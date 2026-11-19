@@ -123,11 +123,6 @@ def test_new_kinds_fit_the_results_they_are_for(con):
             "several rows",
         ),
         (
-            Parts(kind="donut", label="name", value="i"),
-            "SELECT i, i::VARCHAR AS name FROM range(1, 30) t(i)",
-            "too many for a donut",
-        ),
-        (
             Parts(kind="donut", label="category", value="total"),
             "SELECT category, -sum(amount) AS total FROM orders GROUP BY 1",
             "negative",
@@ -201,3 +196,20 @@ def test_views_keep_the_columns_in_their_roles(con):
     cube = Scatter(kind="scatter3d", x="id", y="amount", z="doubled")
     flat = views(cube, run(con, POINTS))[1]
     assert flat == Scatter(kind="scatter", x="id", y="amount", color="doubled")
+
+
+def test_views_are_not_limited_by_how_many_marks_are_readable(con):
+    sql = "SELECT i::VARCHAR AS name, i FROM range(1, 100) t(i)"
+    result = run(con, sql)
+    bar = Bar(kind="bar", x="name", y="i")
+    # The model is steered away from a 99-bar chart...
+    assert any("too many" in p for p in check_spec(bar, result))
+    # ...but the user may still pick any view the columns fit.
+    assert [
+        v.kind for v in views(Parts(kind="treemap", label="name", value="i"), result)
+    ] == [
+        "treemap",
+        "bar",
+        "donut",
+        "table",
+    ]

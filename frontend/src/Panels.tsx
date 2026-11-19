@@ -201,6 +201,7 @@ export function Workspace(props: {
             {KINDS[spec.kind]}
             {run && ` · ${number(run.rows.length)} ${run.rows.length === 1 ? "row" : "rows"} · data as of ${run.data_version}`}
             {chart.revision > 1 && ` · revision ${chart.revision}`}
+            {fig?.note && ` · ${fig.note}`}
           </p>
         </div>
         {chart.views.length > 1 && (

@@ -5,7 +5,36 @@ import type { Config, Data, Layout } from "plotly.js";
 import type { Cell, Column, Run, Spec } from "../api";
 import { cell, label, token } from "./format";
 
-export type Figure = { data: Data[]; layout: Partial<Layout> };
+export type Figure = {
+  data: Data[];
+  layout: Partial<Layout>;
+  /** What the drawing leaves out or groups, if anything. The table has every row. */
+  note?: string;
+};
+
+// Readability limits. Past these the chart draws what fits and says so.
+const SLICES = 8; // one per series colour
+const TILES = 60;
+const BARS = 60;
+
+/** The result with all but the largest `keep - 1` parts summed into one
+    "Other" row, or unchanged if it already fits. */
+function grouped(run: Run, labelName: string, valueName: string, keep: number) {
+  if (run.rows.length <= keep) return { run, rest: [] as string[], note: undefined };
+  const label = run.columns.findIndex((c) => c.name === labelName);
+  const value = run.columns.findIndex((c) => c.name === valueName);
+  const size = (row: Cell[]) => Number(row[value] ?? 0);
+  const kept = new Set([...run.rows].sort((a, b) => size(b) - size(a)).slice(0, keep - 1));
+  const others = run.rows.filter((row) => !kept.has(row));
+  const other = run.columns.map((): Cell => null);
+  other[label] = `Other (${others.length})`;
+  other[value] = others.reduce((sum, row) => sum + size(row), 0);
+  return {
+    run: { ...run, rows: [...run.rows.filter((row) => kept.has(row)), other] },
+    rest: others.map((row) => String(row[label])),
+    note: `${keep - 1} largest shown, ${others.length} more grouped as Other`,
+  };
+}
 type Plotted = Exclude<Spec, { kind: "stat" | "table" }>;
 
 export const config: Partial<Config> = { displayModeBar: false, responsive: true };
@@ -100,10 +129,20 @@ function split(run: Run, by: string | null | undefined) {
 }
 
 function xy(spec: Extract<Plotted, { kind: "bar" | "stacked_bar" | "line" | "area" }>, run: Run, t: Theme): Figure {
+  const isBar = spec.kind === "bar" || spec.kind === "stacked_bar";
+  const categorical = isBar && reader(run).column(spec.x).kind !== "time";
+  let note: string | undefined;
+  if (categorical) {
+    const all = distinct(reader(run).values(spec.x));
+    if (all.length > BARS) {
+      const first = new Set(all.slice(0, BARS));
+      const at = run.columns.findIndex((c) => c.name === spec.x);
+      run = { ...run, rows: run.rows.filter((row) => first.has(row[at] ?? null)) };
+      note = `First ${BARS} of ${all.length} shown`;
+    }
+  }
   const r = reader(run);
   const x = r.column(spec.x);
-  const isBar = spec.kind === "bar" || spec.kind === "stacked_bar";
-  const categorical = isBar && x.kind !== "time";
   const horizontal = isBar && (x.kind === "text" || x.kind === "boolean");
   const xs = placed(r.values(spec.x), x, categorical);
   const ys = r.values(spec.y) as (number | null)[];
@@ -158,11 +197,16 @@ function xy(spec: Extract<Plotted, { kind: "bar" | "stacked_bar" | "line" | "are
   }
   layout.barmode = spec.kind === "stacked_bar" ? "stack" : "group";
   layout.bargap = 0.3;
-  return { data, layout };
+  return { data, layout, note };
 }
 
-function parts(spec: Extract<Plotted, { kind: "donut" | "treemap" }>, run: Run, t: Theme): Figure {
+function parts(spec: Extract<Plotted, { kind: "donut" | "treemap" }>, whole: Run, t: Theme): Figure {
+  const { run, rest, note } = grouped(whole, spec.label, spec.value, spec.kind === "donut" ? SLICES : TILES);
   const r = reader(run);
+  // Hovering "Other" lists what is in it.
+  const inside = rest.length ? `<br>${rest.slice(0, 12).join(", ")}${rest.length > 12 ? ", …" : ""}` : "";
+  const extra = run.rows.map((_, i) => (rest.length && i === run.rows.length - 1 ? inside : ""));
+  const colors = run.rows.map((_, i) => (extra[i] ? t.inkFaint : (t.series[i % t.series.length] as string)));
   const labels = r.values(spec.label).map((v) => cell(v, r.column(spec.label), true));
   const values = r.values(spec.value) as number[];
   const layout = { ...base(t, 1), margin: { l: 16, r: 16, t: 16, b: 16 } };
@@ -174,29 +218,33 @@ function parts(spec: Extract<Plotted, { kind: "donut" | "treemap" }>, run: Run, 
     layout.legend = { ...layout.legend, orientation: "v", x: 1, xanchor: "right", y: 1, yanchor: "top" };
     return {
       layout,
+      note,
       data: [
         {
           type: "pie",
+          customdata: extra,
           hole: 0.62,
           labels,
           values,
           sort: false,
           direction: "clockwise",
-          marker: { colors: t.series, line: { color: t.bg, width: 2 } },
+          marker: { colors, line: { color: t.bg, width: 2 } },
           text,
           textinfo: "text",
           textposition: "outside",
           textfont: { color: t.ink },
-          hovertemplate: `%{label}<br><b>%{value:,}</b> ${label(spec.value)} (%{percent})<extra></extra>`,
+          hovertemplate: `%{label}<br><b>%{value:,}</b> ${label(spec.value)} (%{percent})%{customdata}<extra></extra>`,
         },
       ],
     };
   }
   return {
     layout,
+    note,
     data: [
       {
         type: "treemap",
+        customdata: extra,
         labels,
         values,
         parents: labels.map(() => ""),
@@ -204,7 +252,7 @@ function parts(spec: Extract<Plotted, { kind: "donut" | "treemap" }>, run: Run, 
         marker: { colors: values, colorscale: t.ramp, line: { color: t.bg, width: 2 } } as object,
         textinfo: "label+value+percent root",
         textfont: { color: "#ffffff" },
-        hovertemplate: `%{label}<br><b>%{value:,}</b> ${label(spec.value)}<extra></extra>`,
+        hovertemplate: `%{label}<br><b>%{value:,}</b> ${label(spec.value)}%{customdata}<extra></extra>`,
         tiling: { pad: 2 },
       } as unknown as Data, // the type definitions lag behind treemap's options
     ],
@@ -330,6 +378,7 @@ export function figure(spec: Plotted, run: Run): Figure {
 export function titled(fig: Figure, title: string, subtitle: string): Figure {
   const t = theme();
   const margin = fig.layout.margin ?? {};
+  if (fig.note) subtitle = `${subtitle} · ${fig.note}`;
   return {
     data: fig.data,
     layout: {

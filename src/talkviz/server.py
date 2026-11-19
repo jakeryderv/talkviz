@@ -167,7 +167,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     speaker=app.state.speaker,
                 )
         except llm.ModelFailed as error:
-            reply = "Sorry, I couldn't work that out. Try asking another way."
+            reply = error.reply()
             events.append(
                 store.add_event(
                     chat.id, "assistant", text=reply, verified=False, error=str(error)

@@ -14,7 +14,6 @@ from talkviz.sql import QueryResult
 
 MAX_BARS = 60
 MAX_SERIES = 8  # the interface has eight series colours
-MAX_SLICES = 10
 MAX_CELLS = 60  # distinct values along each side of a heatmap
 
 
@@ -108,8 +107,15 @@ _DISCRETE = ("text", "number", "boolean", "time")
 _ORDERED = ("number", "time")
 
 
-def check_spec(spec: Spec, result: QueryResult) -> list[str]:
-    """Reasons the spec cannot be drawn from the result; empty if it can."""
+def check_spec(spec: Spec, result: QueryResult, legible: bool = True) -> list[str]:
+    """Reasons the spec cannot be drawn from the result; empty if it can.
+
+    Some rules are about correctness (the columns exist and have the right
+    types) and always apply. `legible` adds the rules about readability, such
+    as how many bars fit. Those steer what the model plans, but never stop the
+    user choosing a view: the interface draws what fits and says what it left
+    out.
+    """
     if not result.rows:
         return ["The query returned no rows, so there is nothing to draw."]
     if isinstance(spec, Table):
@@ -126,7 +132,7 @@ def check_spec(spec: Spec, result: QueryResult) -> list[str]:
     if result.truncated:
         return ["The query returns too many rows to chart; aggregate or filter it."]
     if isinstance(spec, Bar | Line):
-        _check_bars_and_lines(spec, check)
+        _check_bars_and_lines(spec, check, legible)
     elif isinstance(spec, Parts):
         _check_parts(spec, check)
     elif isinstance(spec, Heatmap):
@@ -145,7 +151,9 @@ def views(spec: Spec, result: QueryResult) -> list[Spec]:
     found = [spec]
     for kind in _FAMILY:
         other = _convert(spec, kind)
-        if other is not None and other not in found and not check_spec(other, result):
+        if other is None or other in found:
+            continue
+        if not check_spec(other, result, legible=False):
             found.append(other)
     table = Table(kind="table")
     return found if table in found else [*found, table]
@@ -157,7 +165,10 @@ def why_not(spec: Spec, kind: str, result: QueryResult) -> str:
     other = _convert(spec, kind) if kind in _FAMILY else None
     if other is None:
         return f"its columns cannot play the roles a {kind} chart needs."
-    return " ".join(check_spec(other, result)) or "it is not a known chart kind."
+    return (
+        " ".join(check_spec(other, result, legible=False))
+        or "it is not a known chart kind."
+    )
 
 
 class _Check:
@@ -200,7 +211,7 @@ class _Check:
         return len(set(self.result.values(name)))
 
 
-def _check_bars_and_lines(spec: Bar | Line, check: _Check) -> None:
+def _check_bars_and_lines(spec: Bar | Line, check: _Check, legible: bool) -> None:
     ordered = isinstance(spec, Line)
     ok = check.column("x", spec.x, _ORDERED if ordered else _DISCRETE)
     ok = check.column("y", spec.y, ("number",)) and ok
@@ -214,7 +225,7 @@ def _check_bars_and_lines(spec: Bar | Line, check: _Check) -> None:
             f"{spec.series!r} has {check.distinct(spec.series)} values; a chart can"
             f" show at most {MAX_SERIES} series. Keep the top few in the query."
         )
-    if not ordered and check.distinct(spec.x) > MAX_BARS:
+    if legible and not ordered and check.distinct(spec.x) > MAX_BARS:
         check.problems.append(
             f"{check.distinct(spec.x)} bars is too many; keep at most {MAX_BARS}"
             " with ORDER BY and LIMIT."
@@ -237,12 +248,7 @@ def _check_parts(spec: Parts, check: _Check) -> None:
     parts = check.distinct(spec.label)
     if parts < 2:
         check.problems.append("Parts of a whole need at least two parts; use a stat.")
-    limit = MAX_SLICES if spec.kind == "donut" else MAX_BARS
-    if parts > limit:
-        check.problems.append(
-            f"{parts} parts is too many for a {spec.kind}; keep at most {limit},"
-            " or use a bar chart."
-        )
+    # No upper limit: the interface groups the smallest parts as "Other".
 
 
 def _check_heatmap(spec: Heatmap, check: _Check) -> None:

@@ -350,10 +350,49 @@ def test_set_view_to_a_kind_the_result_does_not_fit_is_sent_back(manifest, con):
         {"actions": [create()]},
         "Games lead at 105.",
         {"actions": [{"op": "set_view", "chart_id": "c1", "kind": "scatter3d"}]},
-        {"actions": [{"op": "set_view", "chart_id": "c1", "kind": "table"}]},
+        {"actions": [], "note": "A 3D scatter needs three numbers per row."},
+        "I can't show that in 3D: it needs three numbers for each category.",
     )
     take_turn(model, "sales by category?", manifest, con, workspace, history)
     take_turn(model, "show it in 3D", manifest, con, workspace, history)
     assert "cannot be drawn as 'scatter3d'" in model.sent(3)
     assert "do not draw it as another kind" in model.sent(3)
-    assert workspace.charts[0].view == "table"
+    assert workspace.charts[0].view is None
+    assert history[-1].reply.startswith("I can't show that in 3D")
+
+
+def test_a_view_that_did_not_fit_cannot_be_swapped_for_another_kind(manifest, con):
+    workspace, history = Workspace(), list[Exchange]()
+    model = scripted(
+        {"actions": [create()]},
+        "Games lead at 105.",
+        {"actions": [{"op": "set_view", "chart_id": "c1", "kind": "line"}]},
+        {"actions": [{"op": "set_view", "chart_id": "c1", "kind": "treemap"}]},
+        {"actions": [], "note": "A line needs dates or numbers along the bottom."},
+        "I can't draw that as a line: it needs dates or numbers along the bottom.",
+    )
+    take_turn(model, "sales by category?", manifest, con, workspace, history)
+    turn = take_turn(model, "make it a line", manifest, con, workspace, history)
+    assert "first asked to draw 'Sales by category' as 'line'" in model.sent(4)
+    assert turn.runs == [] and workspace.charts[0].view is None
+    assert turn.reply.startswith("I can't draw that as a line")
+
+
+def test_a_plan_that_never_passes_tells_the_user_why(manifest, con):
+    workspace = Workspace()
+    take_turn(
+        scripted({"actions": [create()]}, "Games lead at 105."),
+        "sales?",
+        manifest,
+        con,
+        workspace,
+        [],
+    )
+    stuck = {"actions": [{"op": "set_view", "chart_id": "c1", "kind": "line"}]}
+    with pytest.raises(llm.ModelFailed) as failed:
+        take_turn(
+            scripted(*[stuck] * 5), "make it a line", manifest, con, workspace, []
+        )
+    assert failed.value.reply().startswith(
+        "Sorry, I couldn't do that. Sales by category can't be drawn as a line chart:"
+    )
