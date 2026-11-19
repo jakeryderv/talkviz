@@ -139,7 +139,7 @@ export function Workspace(props: {
   const run = chart.run;
   const canChart = chart.spec.kind !== "table";
   return (
-    <section className="flex min-h-0 flex-col p-5 pb-3">
+    <section className="flex min-h-0 min-w-0 flex-col p-5 pb-3">
       <header className="mb-4 flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold text-ink-strong">{chart.title}</h1>
@@ -215,7 +215,7 @@ export function Feed(props: {
     props.onSay(said);
   };
   return (
-    <section className="flex min-h-0 flex-col border-t border-line bg-surface" aria-label="Conversation">
+    <section className="flex min-h-0 min-w-0 flex-col border-t border-line bg-surface" aria-label="Conversation">
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-5 py-3" aria-live="polite">
         {props.events.map((event) =>
           event.kind === "chart" ? (

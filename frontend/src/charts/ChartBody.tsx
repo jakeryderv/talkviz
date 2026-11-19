@@ -26,7 +26,7 @@ export function ChartBody({ chart, asTable }: { chart: Chart; asTable: boolean }
     else body = <Columns frame={data} width={size.width} height={height} />;
   }
   return (
-    <div ref={ref} className="h-full min-h-0 overflow-x-hidden overflow-y-auto">
+    <div ref={ref} className="h-full min-h-0 w-full min-w-0 overflow-x-hidden overflow-y-auto">
       {body}
     </div>
   );

@@ -97,7 +97,7 @@ export function App() {
   return (
     <div className="grid h-full grid-cols-[240px_minmax(0,1fr)_260px]">
       <Sidebar chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} />
-      <main className="grid min-h-0 grid-rows-[minmax(0,1fr)_minmax(180px,32%)]">
+      <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_minmax(180px,32%)]">
         <Workspace chart={chart} source={source} busy={pending !== null} onAsk={say} />
         <Feed events={view?.events ?? []} pending={pending} error={error} onSay={say} onFocus={setFocus} />
       </main>
