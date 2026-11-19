@@ -123,54 +123,87 @@ function csv(run: Run): string {
   return [run.columns.map((c) => c.name), ...run.rows].map((row) => row.map(quote).join(",")).join("\n");
 }
 
+function Empty(props: { source: Source | undefined; busy: boolean; onAsk: (text: string) => void }) {
+  const { source } = props;
+  return (
+    <section className="flex min-h-0 min-w-0 flex-col items-center justify-center gap-5 p-8 text-center">
+      <Wave size={56} live={props.busy} />
+      <div>
+        <h1 className="text-2xl font-semibold text-ink-strong">Talk to your data.</h1>
+        <p className="mt-1 text-ink-muted">
+          {source ? `Ask a question about ${source.title}.` : "Register a data source with `talkviz add` to begin."}
+        </p>
+      </div>
+      {source && (
+        <ul className="flex max-w-2xl flex-wrap justify-center gap-2">
+          {source.examples.map((question) => (
+            <li key={question}>
+              <button
+                type="button"
+                onClick={() => props.onAsk(question)}
+                className="cursor-pointer rounded-full border border-line-strong px-3.5 py-1.5 text-sm text-ink hover:border-primary hover:text-ink-strong"
+              >
+                {question}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** The charts on screen: one, or up to four side by side. */
 export function Workspace(props: {
-  chart: Chart | undefined;
+  charts: Chart[];
   source: Source | undefined;
   busy: boolean;
   onAsk: (text: string) => void;
   onDraw: (chartId: string, kind: Kind) => void;
+  onClose: (chartId: string) => void;
 }) {
-  const { chart, source } = props;
+  const count = props.charts.length;
+  if (count === 0) return <Empty source={props.source} busy={props.busy} onAsk={props.onAsk} />;
+  const columns = count > 1 ? "grid-cols-[repeat(2,minmax(0,1fr))]" : "grid-cols-[minmax(0,1fr)]";
+  const rows = count > 2 ? "grid-rows-[repeat(2,minmax(0,1fr))]" : "grid-rows-[minmax(0,1fr)]";
+  return (
+    <div className={`grid min-h-0 min-w-0 gap-px bg-line ${columns} ${rows}`}>
+      {props.charts.map((chart, i) => (
+        <Pane
+          key={chart.id}
+          chart={chart}
+          source={props.source}
+          busy={props.busy}
+          beside={count > 1}
+          wide={count === 3 && i === 2}
+          onDraw={props.onDraw}
+          onClose={props.onClose}
+        />
+      ))}
+    </div>
+  );
+}
+
+function Pane(props: {
+  chart: Chart;
+  source: Source | undefined;
+  busy: boolean;
+  /** Shown beside other charts, so its controls are kept small. */
+  beside: boolean;
+  wide: boolean;
+  onDraw: (chartId: string, kind: Kind) => void;
+  onClose: (chartId: string) => void;
+}) {
+  const { chart, source, beside } = props;
   const [details, setDetails] = useState(false);
   const [saving, setSaving] = useState(false);
-  useEffect(() => setSaving(false), [chart?.id]);
-  const kind = chart ? (chart.view ?? chart.spec.kind) : null;
-
-  const run = chart?.run ?? null;
-  const spec = chart ? (chart.views.find((view) => view.kind === kind) ?? chart.spec) : null;
+  const kind = chart.view ?? chart.spec.kind;
+  const run = chart.run;
+  const spec = chart.views.find((view) => view.kind === kind) ?? chart.spec;
   const fig = useMemo(
-    () => (spec && run && spec.kind !== "stat" && spec.kind !== "table" ? figure(spec, run) : null),
+    () => (run && spec.kind !== "stat" && spec.kind !== "table" ? figure(spec, run) : null),
     [spec, run],
   );
-
-  if (!chart || !spec) {
-    return (
-      <section className="flex min-h-0 min-w-0 flex-col items-center justify-center gap-5 p-8 text-center">
-        <Wave size={56} live={props.busy} />
-        <div>
-          <h1 className="text-2xl font-semibold text-ink-strong">Talk to your data.</h1>
-          <p className="mt-1 text-ink-muted">
-            {source ? `Ask a question about ${source.title}.` : "Register a data source with `talkviz add` to begin."}
-          </p>
-        </div>
-        {source && (
-          <ul className="flex max-w-2xl flex-wrap justify-center gap-2">
-            {source.examples.map((question) => (
-              <li key={question}>
-                <button
-                  type="button"
-                  onClick={() => props.onAsk(question)}
-                  className="cursor-pointer rounded-full border border-line-strong px-3.5 py-1.5 text-sm text-ink hover:border-primary hover:text-ink-strong"
-                >
-                  {question}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    );
-  }
 
   const subtitle = run ? `${source?.title ?? chart.title} · data as of ${run.data_version}` : "";
   const saveImage = async () => {
@@ -193,10 +226,10 @@ export function Workspace(props: {
   const quiet = "cursor-pointer rounded-md border px-2.5 py-1.5 text-xs";
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-col p-5 pb-3">
-      <header className="mb-4 flex flex-wrap items-start gap-3">
+    <section className={`flex min-h-0 min-w-0 flex-col bg-bg ${beside ? "p-3" : "p-5 pb-3"} ${props.wide ? "col-span-2" : ""}`}>
+      <header className={`flex flex-wrap items-start ${beside ? "mb-2 gap-2" : "mb-4 gap-3"}`}>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-lg font-semibold text-ink-strong">{chart.title}</h1>
+          <h1 className={`truncate font-semibold text-ink-strong ${beside ? "text-sm" : "text-lg"}`}>{chart.title}</h1>
           <p className="text-xs text-ink-faint">
             {KINDS[spec.kind]}
             {run && ` · ${number(run.rows.length)} ${run.rows.length === 1 ? "row" : "rows"} · data as of ${run.data_version}`}
@@ -204,7 +237,21 @@ export function Workspace(props: {
             {fig?.note && ` · ${fig.note}`}
           </p>
         </div>
-        {chart.views.length > 1 && (
+        {chart.views.length > 1 && beside && (
+          <select
+            aria-label="View"
+            value={spec.kind}
+            onChange={(event) => props.onDraw(chart.id, event.target.value as Kind)}
+            className="cursor-pointer rounded-md border border-line-strong bg-bg px-2 py-1.5 text-xs text-ink"
+          >
+            {chart.views.map((view) => (
+              <option key={view.kind} value={view.kind}>
+                {KINDS[view.kind]}
+              </option>
+            ))}
+          </select>
+        )}
+        {chart.views.length > 1 && !beside && (
           <div className="flex rounded-md border border-line-strong p-0.5 text-xs" role="group" aria-label="View">
             {chart.views.map((view) => (
               <button
@@ -264,8 +311,18 @@ export function Workspace(props: {
           onClick={() => setDetails((open) => !open)}
           className={`${quiet} ${details ? "border-primary text-ink-strong" : "border-line-strong text-ink-muted hover:text-ink"}`}
         >
-          How this was computed
+          {beside ? "Query" : "How this was computed"}
         </button>
+        {beside && (
+          <button
+            type="button"
+            aria-label={`Close ${chart.title}`}
+            onClick={() => props.onClose(chart.id)}
+            className={`${quiet} border-line-strong text-ink-muted hover:text-ink`}
+          >
+            ×
+          </button>
+        )}
       </header>
       <div className={`min-h-0 min-w-0 flex-1 overflow-auto transition-opacity ${props.busy ? "opacity-50" : ""}`}>
         <ChartBody spec={spec} run={run} fig={fig} />
@@ -377,27 +434,54 @@ function Line({ who, text, flagged = false }: { who: "user" | "assistant"; text:
   );
 }
 
-export function ChartList(props: { charts: Chart[]; focus: string | null; onFocus: (id: string) => void }) {
+export function ChartList(props: {
+  charts: Chart[];
+  shown: string[];
+  /** No room to show another chart beside those showing. */
+  full: boolean;
+  onFocus: (id: string) => void;
+  onToggle: (id: string) => void;
+}) {
   return (
     <aside className="flex min-h-0 flex-col border-l border-line bg-surface">
       <h2 className="px-4 pt-4 pb-2 text-xs font-medium tracking-wide text-ink-faint uppercase">Charts</h2>
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" aria-label="Charts in this chat">
         {props.charts.length === 0 && <p className="px-2.5 text-sm text-ink-faint">Charts you create appear here.</p>}
-        {props.charts.map((chart, i) => (
-          <button
-            key={chart.id}
-            type="button"
-            onClick={() => props.onFocus(chart.id)}
-            aria-current={chart.id === props.focus ? "true" : undefined}
-            className={`flex w-full cursor-pointer gap-2.5 rounded-md px-2.5 py-2 text-left ${chart.id === props.focus ? "bg-raised text-ink-strong" : "text-ink-muted hover:bg-raised/50 hover:text-ink"}`}
-          >
-            <span className="w-4 shrink-0 text-xs leading-5 text-ink-faint tabular-nums">{i + 1}</span>
-            <span className="min-w-0">
-              <span className="block text-sm leading-5">{chart.title}</span>
-              <span className="block text-xs text-ink-faint">{KINDS[chart.view ?? chart.spec.kind]}</span>
-            </span>
-          </button>
-        ))}
+        {props.charts.map((chart, i) => {
+          const on = props.shown.includes(chart.id);
+          // The only chart showing cannot be taken away, and a full workspace takes no more.
+          const can = on ? props.shown.length > 1 : props.shown.length > 0 && !props.full;
+          return (
+            <div
+              key={chart.id}
+              className={`group flex items-start rounded-md ${on ? "bg-raised text-ink-strong" : "text-ink-muted hover:bg-raised/50 hover:text-ink"}`}
+            >
+              <button
+                type="button"
+                onClick={() => props.onFocus(chart.id)}
+                aria-current={on ? "true" : undefined}
+                className="flex min-w-0 flex-1 cursor-pointer gap-2.5 px-2.5 py-2 text-left"
+              >
+                <span className="w-4 shrink-0 text-xs leading-5 text-ink-faint tabular-nums">{i + 1}</span>
+                <span className="min-w-0">
+                  <span className="block text-sm leading-5">{chart.title}</span>
+                  <span className="block text-xs text-ink-faint">{KINDS[chart.view ?? chart.spec.kind]}</span>
+                </span>
+              </button>
+              {can && (
+                <button
+                  type="button"
+                  onClick={() => props.onToggle(chart.id)}
+                  aria-label={on ? `Stop showing ${chart.title}` : `Show ${chart.title} alongside`}
+                  title={on ? "Stop showing" : "Show alongside"}
+                  className="mt-1.5 mr-1.5 cursor-pointer rounded px-1.5 text-sm leading-6 text-ink-faint opacity-0 group-hover:opacity-100 hover:bg-line-strong hover:text-ink-strong focus-visible:opacity-100"
+                >
+                  {on ? "−" : "+"}
+                </button>
+              )}
+            </div>
+          );
+        })}
       </nav>
     </aside>
   );

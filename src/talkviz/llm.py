@@ -57,7 +57,7 @@ DEFAULT_EFFORT: Effort | None = "low"
 # The model that writes the reply; None means the planning model does.
 DEFAULT_SPEECH_MODEL: str | None = "anthropic/claude-haiku-5.5"
 DEFAULT_SPEECH_EFFORT: Effort | None = "none"
-MAX_ACTIONS = 3
+MAX_ACTIONS = 4
 RETRIES = 2
 # Rows of each result shown to the model when it writes the reply.
 SPEECH_ROWS = 40
@@ -493,7 +493,9 @@ only to show the same result another way.
   give a different kind from the one they asked for.
 - When something they ask for cannot be done, say so and why in the note. Do
   not do something else in its place without saying.
-- show_chart when they ask to see an existing chart again.
+- show_chart when they ask to see an existing chart again. To show several
+  charts side by side, give one show_chart for each; the charts of a turn
+  are shown together.
 - Titles are how the user refers to charts aloud: short, specific, distinct.
 - If the question cannot be answered from this dataset, or is too vague to
   chart, return no actions and a note that says why or asks what they mean.
@@ -577,6 +579,9 @@ def view_reply(runs: list[ChartRun]) -> str | None:
     needs no model: there is nothing new to say about the data. None otherwise."""
     if not runs or any(run.op not in ("set_view", "show_chart") for run in runs):
         return None
+    if len(runs) > 1 and all(run.op == "show_chart" for run in runs):
+        titles = [run.chart.title for run in runs]
+        return f"Here are {', '.join(titles[:-1])} and {titles[-1]}, side by side."
     return " ".join(
         f"Here's {run.chart.title} again."
         if run.op == "show_chart"

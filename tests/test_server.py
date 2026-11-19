@@ -45,7 +45,7 @@ def test_a_turn_adds_a_chart_its_result_and_the_feed(source):
     assert turn["chat"]["title"] == "sales by category?"
     assert [e["kind"] for e in turn["events"]] == ["user", "chart", "assistant"]
     assert turn["events"][1]["op"] == "create_chart"
-    assert turn["focus"] == "c1"
+    assert turn["shown"] == ["c1"]
     [chart] = turn["charts"]
     assert chart["spec"] == {
         "kind": "bar",
@@ -88,7 +88,7 @@ def test_a_chat_is_restored_with_charts_results_and_feed(source):
     ]
     assert view["charts"][1]["run"]["rows"] == [[6]]
     assert view["events"][-1]["text"] == "Here's Sales by category as a table."
-    assert view["focus"] == "c1"
+    assert view["shown"] == ["c1"]
     assert [e["kind"] for e in view["events"]] == ["user", "chart", "assistant"] * 3
     assert [c["title"] for c in app.get("/api/chats").json()] == ["sales by category?"]
 
@@ -182,3 +182,29 @@ def test_a_view_is_saved_without_a_revision_query_or_feed_entry(source):
         ).status_code
         == 404
     )
+
+
+def test_the_charts_of_the_latest_turn_are_shown_together(source):
+    app = client(
+        {"actions": [create()]},
+        "Games lead at 105.",
+        {"actions": [ORDERS]},
+        "There are 6 orders.",
+        {
+            "actions": [
+                {"op": "show_chart", "chart_id": "c1"},
+                {"op": "show_chart", "chart_id": "c2"},
+            ]
+        },
+    )
+    chat_id = app.post("/api/chats", json={}).json()["id"]
+    for text in ("sales by category?", "how many orders?"):
+        turn = app.post(f"/api/chats/{chat_id}/turns", json={"text": text}).json()
+    assert turn["shown"] == ["c2"]
+    turn = app.post(f"/api/chats/{chat_id}/turns", json={"text": "both"}).json()
+    assert turn["shown"] == ["c1", "c2"]
+    assert (
+        turn["events"][-1]["text"]
+        == "Here are Sales by category and Orders, side by side."
+    )
+    assert app.get(f"/api/chats/{chat_id}").json()["shown"] == ["c1", "c2"]

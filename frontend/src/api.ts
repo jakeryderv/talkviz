@@ -59,8 +59,8 @@ export type FeedEvent = {
 };
 
 export type Chat = { id: string; source: string; title: string; created_at: string };
-export type ChatView = { chat: Chat; charts: Chart[]; events: FeedEvent[]; focus: string | null };
-export type TurnView = { chat: Chat; events: FeedEvent[]; charts: Chart[]; focus: string | null };
+export type ChatView = { chat: Chat; charts: Chart[]; events: FeedEvent[]; shown: string[] };
+export type TurnView = { chat: Chat; events: FeedEvent[]; charts: Chart[]; shown: string[] };
 export type Source = {
   name: string;
   title: string;

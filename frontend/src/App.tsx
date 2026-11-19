@@ -2,11 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type Chart, type Chat, type ChatView, type Kind, type Source } from "./api";
 import { ChartList, Feed, Sidebar, Workspace } from "./Panels";
 
+const MAX_SHOWN = 4;
+
 export function App() {
   const [sources, setSources] = useState<Source[]>([]);
   const [chats, setChats] = useState<Chat[]>([]);
   const [view, setView] = useState<ChatView | null>(null);
-  const [focus, setFocus] = useState<string | null>(null);
+  // The charts in the workspace; more than one is drawn side by side.
+  const [shown, setShown] = useState<string[]>([]);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -17,31 +20,31 @@ export function App() {
     api.chats().then(setChats).catch(fail);
   }, []);
 
-  const open = useCallback((id: string, chartId?: string) => {
+  const open = useCallback((id: string, chartIds?: string[]) => {
     setError(null);
     api
       .chat(id)
       .then((loaded) => {
         setView(loaded);
-        setFocus(chartId ?? loaded.focus);
+        setShown(chartIds?.length ? chartIds : loaded.shown);
       })
       .catch(fail);
   }, []);
 
-  // The address holds the open chat and chart (#chat/chart), so a reload or a
-  // bookmark comes back to the same place.
+  // The address holds the open chat and its charts (#chat/c1+c2), so a reload
+  // or a bookmark comes back to the same place.
   useEffect(() => {
-    const [chatId, chartId] = location.hash.slice(1).split("/");
-    if (chatId) open(chatId, chartId);
+    const [chatId, charts] = location.hash.slice(1).split("/");
+    if (chatId) open(chatId, charts?.split("+").filter(Boolean));
   }, [open]);
   useEffect(() => {
-    const hash = view ? `#${view.chat.id}${focus ? `/${focus}` : ""}` : "";
+    const hash = view ? `#${view.chat.id}${shown.length ? `/${shown.join("+")}` : ""}` : "";
     if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname);
-  }, [view?.chat.id, focus]);
+  }, [view?.chat.id, shown.join()]);
 
   const startNew = () => {
     setView(null);
-    setFocus(null);
+    setShown([]);
     setError(null);
   };
 
@@ -50,7 +53,7 @@ export function App() {
     setPending(text);
     try {
       const chat = view?.chat ?? (await api.newChat());
-      const current = view ?? { chat, charts: [], events: [], focus: null };
+      const current = view ?? { chat, charts: [], events: [], shown: [] };
       if (!view) setView(current);
       const turn = await api.say(chat.id, text);
       const changed = new Map(turn.charts.map((c) => [c.id, c]));
@@ -61,9 +64,9 @@ export function App() {
           ...turn.charts.filter((c) => !current.charts.some((old) => old.id === c.id)),
         ],
         events: [...current.events, ...turn.events],
-        focus: turn.focus ?? current.focus,
+        shown: turn.shown.length ? turn.shown : current.shown,
       });
-      if (turn.focus) setFocus(turn.focus);
+      if (turn.shown.length) setShown(turn.shown);
       setChats((all) => [turn.chat, ...all.filter((c) => c.id !== turn.chat.id)]);
     } catch (e) {
       fail(e);
@@ -74,7 +77,17 @@ export function App() {
 
   // Clicking a chart shows it and quietly re-runs it on the current data.
   const show = (chartId: string) => {
-    setFocus(chartId);
+    setShown([chartId]);
+    refresh(chartId);
+  };
+  // Adds a chart beside those showing, or takes it away.
+  const toggle = (chartId: string) => {
+    if (shown.includes(chartId)) return setShown(shown.filter((id) => id !== chartId));
+    if (shown.length >= MAX_SHOWN) return;
+    setShown([...shown, chartId]);
+    refresh(chartId);
+  };
+  const refresh = (chartId: string) => {
     if (!view) return;
     const replace = (fresh: Chart) =>
       setView((v) => v && { ...v, charts: v.charts.map((c) => (c.id === fresh.id ? fresh : c)) });
@@ -103,16 +116,16 @@ export function App() {
   };
 
   const source = sources.find((s) => s.name === view?.chat.source) ?? sources[0];
-  const chart = view?.charts.find((c) => c.id === focus);
+  const charts = shown.flatMap((id) => view?.charts.find((c) => c.id === id) ?? []);
 
   return (
     <div className="grid h-full grid-cols-[240px_minmax(0,1fr)_260px]">
       <Sidebar chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} />
       <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_minmax(180px,32%)]">
-        <Workspace chart={chart} source={source} busy={pending !== null} onAsk={say} onDraw={draw} />
-        <Feed events={view?.events ?? []} pending={pending} error={error} onSay={say} onFocus={setFocus} />
+        <Workspace charts={charts} source={source} busy={pending !== null} onAsk={say} onDraw={draw} onClose={toggle} />
+        <Feed events={view?.events ?? []} pending={pending} error={error} onSay={say} onFocus={show} />
       </main>
-      <ChartList charts={view?.charts ?? []} focus={focus} onFocus={show} />
+      <ChartList charts={view?.charts ?? []} shown={shown} full={shown.length >= MAX_SHOWN} onFocus={show} onToggle={toggle} />
     </div>
   );
 }

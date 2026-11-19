@@ -249,9 +249,11 @@ function parts(spec: Extract<Plotted, { kind: "donut" | "treemap" }>, whole: Run
         values,
         parents: labels.map(() => ""),
         branchvalues: "total",
-        marker: { colors: values, colorscale: t.ramp, line: { color: t.bg, width: 2 } } as object,
+        marker: { colors: values, colorscale: t.ramp, line: { color: t.bg, width: 2 }, pad: { t: 0, l: 0, r: 0, b: 0 } } as object,
         textinfo: "label+value+percent root",
-        textfont: { color: "#ffffff" },
+        // No fixed text colour: Plotly picks one that contrasts with each tile.
+        root: { color: t.bg },
+        pathbar: { visible: false },
         hovertemplate: `%{label}<br><b>%{value:,}</b> ${label(spec.value)}%{customdata}<extra></extra>`,
         tiling: { pad: 2 },
       } as unknown as Data, // the type definitions lag behind treemap's options

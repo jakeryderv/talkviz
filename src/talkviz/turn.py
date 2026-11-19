@@ -105,19 +105,26 @@ def _shortcut(
     It can then change the query or explain what cannot be done.
     """
     found = router.shortcut(question, workspace, focus, seen)
-    # Several charts at once is not something a turn can do yet.
-    if found is None or len(found.chart_ids) != 1:
+    if found is None or not 0 < len(found.chart_ids) <= llm.MAX_ACTIONS:
         return None
-    chart = workspace.get(found.chart_ids[0])
-    if chart is None:
+    charts = [c for c in map(workspace.get, found.chart_ids) if c is not None]
+    if len(charts) != len(found.chart_ids):
         return None
     try:
-        result = check_and_run(con, chart.sql, manifest)
+        results = [check_and_run(con, chart.sql, manifest) for chart in charts]
     except QueryRejected:
         return None
     if found.op == "show_chart":
-        action = ShowChart(op="show_chart", chart_id=chart.id)
-    elif found.kind in [view.kind for view in views(chart.spec, result)]:
+        shows = [ShowChart(op="show_chart", chart_id=chart.id) for chart in charts]
+        runs = [
+            ChartRun(workspace.resolve(show), result, show.op)
+            for show, result in zip(shows, results, strict=True)
+        ]
+        return Planned(Plan(actions=list(shows)), runs, b"[]")
+    if len(charts) != 1:
+        return None
+    chart, result = charts[0], results[0]
+    if found.kind in [view.kind for view in views(chart.spec, result)]:
         action = SetView(op="set_view", chart_id=chart.id, kind=found.kind)
     else:
         assert found.kind is not None
