@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">TalkViz waveform icon</title>
+  <rect width="256" height="256" rx="58" fill="#18181B"/>
+  <g fill="none" stroke="#3B82F6" stroke-width="15" stroke-linecap="round">
+    <path d="M51 112v32"/><path d="M89 83v90"/><path d="M127 57v142"/><path d="M165 85v86"/><path d="M203 111v34"/>
+  </g>
+</svg>

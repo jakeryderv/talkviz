@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="240" viewBox="0 0 960 240" role="img" aria-labelledby="title desc">
+  <title id="title">TalkViz dark-mode wordmark</title>
+  <desc id="desc">Light audio waveform and Talk text, with blue Viz text, on a transparent background.</desc>
+  <g fill="none" stroke="#3B82F6" stroke-width="11" stroke-linecap="round">
+    <path d="M42 103v34"/><path d="M66 78v84"/><path d="M90 54v132"/><path d="M114 83v74"/><path d="M138 104v32"/>
+  </g>
+  <text x="182" y="155" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="107" font-weight="750" letter-spacing="-6" fill="#D4D4D8">talk</text>
+  <text x="405" y="155" font-family="Inter, DejaVu Sans, Arial, sans-serif" font-size="107" font-weight="750" letter-spacing="-6" fill="#3B82F6">viz</text>
+</svg>
