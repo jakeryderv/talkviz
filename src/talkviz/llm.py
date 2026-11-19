@@ -6,9 +6,14 @@ model returns and send it back with the reasons when it fails:
 - plan():  every query is linted, type-checked, and run; every chart spec is
            checked against its query's result
 - speak(): every number in the reply must come from those results
+
+speak_stream() is speak() for a reply that is shown or read out as it is
+written; it checks each sentence before passing it on.
 """
 
 import os
+import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Literal, cast, get_args
 
@@ -34,17 +39,16 @@ from talkviz.speech import numbers_in, unsupported_numbers
 from talkviz.sql import QueryRejected, QueryResult, check_and_run
 from talkviz.workspace import Action, Chart, CreateChart, Workspace
 
+Effort = Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
+EFFORTS: tuple[str, ...] = get_args(Effort)
+
 DEFAULT_MODEL = "anthropic/claude-opus-5.5"
 # None leaves reasoning at the model's own default.
-DEFAULT_EFFORT: "Effort | None" = None
+DEFAULT_EFFORT: Effort | None = None
 MAX_ACTIONS = 3
 RETRIES = 2
 # Rows of each result shown to the model when it writes the reply.
 SPEECH_ROWS = 40
-
-
-Effort = Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
-EFFORTS: tuple[str, ...] = get_args(Effort)
 
 
 def openrouter(name: str | None = None, effort: str | None = None) -> Model:
@@ -160,10 +164,7 @@ def speak(
     history: list[Exchange],
 ) -> Spoken:
     """Ask the model for the spoken reply to a planned turn."""
-    allowed = numbers_in([question])
-    for run in planned.runs:
-        allowed |= numbers_in([run.chart.title, run.chart.sql, len(run.result.rows)])
-        allowed |= numbers_in(value for row in run.result.rows for value in row)
+    allowed = _allowed_numbers(question, planned)
     agent = Agent(
         model,
         deps_type=set,
@@ -175,12 +176,50 @@ def speak(
     try:
         result = agent.run_sync(prompt, deps=allowed)
     except UnexpectedModelBehavior:  # retries ran out; other errors propagate
-        titles = " and ".join(run.chart.title for run in planned.runs)
-        fallback = f"Here is {titles}." if titles else "Sorry, I couldn't answer that."
-        return Spoken(fallback, verified=False, messages=b"[]")
+        return Spoken(_fallback(planned), verified=False, messages=b"[]")
     return Spoken(
         result.output.strip(), verified=True, messages=result.all_messages_json()
     )
+
+
+def speak_stream(
+    model: Model,
+    question: str,
+    manifest: Manifest,
+    planned: Planned,
+    history: list[Exchange],
+) -> Iterator[str | Spoken]:
+    """speak(), yielding the reply a sentence at a time and then its Spoken.
+
+    Each sentence's numbers are checked before it is yielded, so nothing passed
+    on contains a number that is not in the results. If the first sentence fails,
+    the model tries again as in speak(). If a later one fails, what was said
+    cannot be taken back, so the reply ends at the last good sentence and is
+    marked unverified. Either way the Spoken's text is the yielded chunks joined.
+    """
+    allowed = _allowed_numbers(question, planned)
+    agent = Agent(model, instructions=_speech_instructions(manifest))
+    first = prompt = _speech_prompt(question, planned, history)
+    said: list[str] = []
+    for _ in range(RETRIES + 1):
+        with agent.run_stream_sync(prompt) as stream:
+            deltas = stream.stream_text(delta=True, debounce_by=None)
+            for sentence in _sentences(deltas):
+                unsupported = unsupported_numbers(sentence, allowed)
+                if unsupported:
+                    break
+                yield f" {sentence}" if said else sentence
+                said.append(sentence)
+            else:
+                yield Spoken(" ".join(said), True, stream.all_messages_json())
+                return
+            messages = stream.all_messages_json()
+        if said:
+            yield Spoken(" ".join(said), False, messages)
+            return
+        prompt = f"{first}\n\n{_unsupported(unsupported)}"
+    yield _fallback(planned)
+    yield Spoken(_fallback(planned), False, b"[]")
 
 
 def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
@@ -226,13 +265,47 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
 def _validate_speech(ctx: RunContext[set], output: str) -> str:
     unsupported = unsupported_numbers(output, ctx.deps)
     if unsupported:
-        raise ModelRetry(
-            "These numbers are not in the query results: "
-            + ", ".join(unsupported)
-            + ". Say only figures that appear in the results, and do not"
-            " compute new ones."
-        )
+        raise ModelRetry(_unsupported(unsupported))
     return output
+
+
+def _unsupported(numbers: list[str]) -> str:
+    return (
+        "These numbers are not in the query results: "
+        + ", ".join(numbers)
+        + ". Say only figures that appear in the results, and do not"
+        " compute new ones."
+    )
+
+
+def _allowed_numbers(question: str, planned: Planned) -> set[float]:
+    allowed = numbers_in([question])
+    for run in planned.runs:
+        allowed |= numbers_in([run.chart.title, run.chart.sql, len(run.result.rows)])
+        allowed |= numbers_in(value for row in run.result.rows for value in row)
+    return allowed
+
+
+def _fallback(planned: Planned) -> str:
+    titles = " and ".join(run.chart.title for run in planned.runs)
+    return f"Here is {titles}." if titles else "Sorry, I couldn't answer that."
+
+
+# Where a sentence ends: after . ! or ?, any closing quotes, then whitespace.
+_SENTENCE_END = re.compile(r"(?<=[.!?])[\"')\]]*\s+")
+
+
+def _sentences(deltas: Iterable[str]) -> Iterator[str]:
+    """Regroup streamed text into whole sentences."""
+    buffer = ""
+    for delta in deltas:
+        buffer += delta
+        while end := _SENTENCE_END.search(buffer):
+            sentence, buffer = buffer[: end.end()].strip(), buffer[end.end() :]
+            if sentence:
+                yield sentence
+    if buffer.strip():
+        yield buffer.strip()
 
 
 def _plan_instructions(manifest: Manifest) -> str:

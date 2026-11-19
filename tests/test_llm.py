@@ -1,6 +1,7 @@
 """The model calls, driven by scripted models instead of a real one."""
 
 import json
+from collections.abc import AsyncIterator
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
@@ -138,6 +139,66 @@ def test_speak_falls_back_when_the_numbers_never_check_out(manifest, con):
     speaker = scripted(*["Games made 999."] * 3)
     spoken = llm.speak(speaker, "sales?", manifest, planned, [])
     assert (spoken.text, spoken.verified) == ("Here is Sales by category.", False)
+
+
+class Streamed(FunctionModel):
+    """A streaming model that sends each reply in the given pieces."""
+
+    def __init__(self, *replies: list[str]):
+        self.replies = list(replies)
+        self.seen: list[list[ModelMessage]] = []
+        super().__init__(stream_function=self.stream)
+
+    async def stream(
+        self, messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str]:
+        self.seen.append(list(messages))
+        for piece in self.replies.pop(0):
+            yield piece
+
+    sent = Scripted.sent
+
+
+def stream_reply(speaker, manifest, con):
+    question = "sales by category?"
+    planner = scripted({"actions": [create()]})
+    planned = llm.plan(planner, question, manifest, con, Workspace(), [])
+    *chunks, spoken = llm.speak_stream(speaker, question, manifest, planned, [])
+    assert all(isinstance(chunk, str) for chunk in chunks)
+    assert isinstance(spoken, llm.Spoken)
+    assert spoken.text == "".join(str(chunk) for chunk in chunks)
+    return chunks, spoken
+
+
+def test_speak_stream_yields_checked_sentences_then_the_result(manifest, con):
+    speaker = Streamed(
+        ["Games le", "ad with 105.", " Books follow at 4", "0.5 in sales."]
+    )
+    chunks, spoken = stream_reply(speaker, manifest, con)
+    assert chunks == ["Games lead with 105.", " Books follow at 40.5 in sales."]
+    assert spoken.verified
+    assert "games | 105.0" in speaker.sent(0)
+
+
+def test_speak_stream_retries_when_the_first_sentence_fails(manifest, con):
+    speaker = Streamed(["Games made 250. ", "Never sent."], ["Games made 105."])
+    chunks, spoken = stream_reply(speaker, manifest, con)
+    assert (chunks, spoken.verified) == (["Games made 105."], True)
+    assert "not in the query results: 250" in speaker.sent(1)
+
+
+def test_speak_stream_stops_at_a_bad_sentence_once_text_is_out(manifest, con):
+    speaker = Streamed(["Games lead with 105. ", "That is 62% of sales. ", "More."])
+    chunks, spoken = stream_reply(speaker, manifest, con)
+    assert chunks == ["Games lead with 105."]
+    assert not spoken.verified
+
+
+def test_speak_stream_falls_back_when_no_reply_checks_out(manifest, con):
+    speaker = Streamed(*[["Games made 999."]] * 3)
+    chunks, spoken = stream_reply(speaker, manifest, con)
+    assert chunks == ["Here is Sales by category."]
+    assert not spoken.verified
 
 
 def test_turns_build_up_a_workspace_and_edit_charts_in_place(manifest, con):
