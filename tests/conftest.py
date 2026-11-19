@@ -2,8 +2,10 @@ from datetime import date
 
 import duckdb
 import pytest
+import yaml
 
 from talkviz.manifest import Manifest
+from talkviz.sources import add_source
 from talkviz.sql import connect
 
 MANIFEST = {
@@ -67,3 +69,11 @@ def database(tmp_path):
 def con(database):
     with connect(database) as connection:
         yield connection
+
+
+@pytest.fixture
+def source(database, tmp_path, monkeypatch):
+    monkeypatch.setenv("TALKVIZ_HOME", str(tmp_path / "home"))
+    manifest = tmp_path / "shop.yaml"
+    manifest.write_text(yaml.safe_dump(MANIFEST))
+    return add_source(database, manifest)

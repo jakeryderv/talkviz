@@ -1,12 +1,8 @@
-import pytest
-import yaml
-from conftest import MANIFEST
 from fastapi.testclient import TestClient
 from test_llm import Scripted, create
 
 from talkviz import llm
 from talkviz.server import create_app
-from talkviz.sources import add_source
 from talkviz.store import Store
 
 ORDERS = create(
@@ -14,14 +10,6 @@ ORDERS = create(
     sql="SELECT count(*) AS orders FROM orders",
     spec={"kind": "stat", "value": "orders", "label": "orders"},
 )
-
-
-@pytest.fixture
-def source(database, tmp_path, monkeypatch):
-    monkeypatch.setenv("TALKVIZ_HOME", str(tmp_path / "home"))
-    manifest = tmp_path / "shop.yaml"
-    manifest.write_text(yaml.safe_dump(MANIFEST))
-    return add_source(database, manifest)
 
 
 def client(*replies):
@@ -268,7 +256,9 @@ def test_a_chat_keeps_its_own_settings_copied_from_the_defaults(source, monkeypa
     assert app.get(f"/api/chats/{first}").json()["settings"]["model"] == (
         llm.DEFAULT_MODEL
     )
-    assert app.get(f"/api/chats/{second}").json()["settings"] == {
+    saved = app.get(f"/api/chats/{second}").json()["settings"]
+    assert saved.pop("voice")["speak_model"] == "eleven_flash_v2_5"
+    assert saved == {
         "model": "other/planner",
         "effort": None,
         "reply_model": None,

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from talkviz import llm
 from talkviz.llm import Effort, Model
+from talkviz.voice import VoiceSettings
 
 
 class Settings(BaseModel):
@@ -27,6 +28,8 @@ class Settings(BaseModel):
     reply_effort: Effort | None = None
     router: bool = True
     """Whether the fast router sees each message first."""
+    voice: VoiceSettings = VoiceSettings()
+    """How the chat listens and speaks in voice mode."""
 
 
 def from_environment() -> Settings:

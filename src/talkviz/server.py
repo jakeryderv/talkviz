@@ -4,16 +4,18 @@ built interface served from talkviz/web.
 
 import os
 import time
+from collections.abc import Callable, Iterator
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from talkviz import llm, route, settings
+from talkviz import llm, route, settings, voice
 from talkviz.charts import ChartSpec, views
 from talkviz.llm import Exchange, Model
 from talkviz.settings import Settings
@@ -60,6 +62,16 @@ class SettingsView(BaseModel):
     keys: dict[str, bool]
     """Whether each service's API key is set. Keys themselves stay in the
     environment and are never sent to the browser."""
+
+
+class VoicesView(BaseModel):
+    voices: list[voice.Voice]
+    note: str | None = None
+    """Why the list is not the account's own, when it is not."""
+
+
+class Heard(BaseModel):
+    text: str
 
 
 class ChatView(BaseModel):
@@ -179,6 +191,49 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
     def save_settings(body: Settings, chat: Current, store: Stored) -> Settings:
         store.set_chat_settings(chat.id, body)
         return body
+
+    @app.post("/api/transcribe")
+    async def transcribe(
+        request: Request, store: Stored, chat: str | None = None
+    ) -> Heard:
+        """The words in a recording, sent as the request body. `chat` names
+        the chat whose voice settings to use; without it, the defaults."""
+        audio = await request.body()
+        if not audio or len(audio) > voice.MAX_AUDIO_BYTES:
+            raise HTTPException(413 if audio else 400, "Send a short recording.")
+        found = store.chat(chat) if chat else None
+        chosen = (settings_of(found) if found else defaults()).voice
+        kind = request.headers.get("content-type", "audio/webm")
+        return Heard(text=_voiced(lambda: voice.transcribe(audio, kind, chosen)))
+
+    @app.get("/api/chats/{chat_id}/events/{event_id}/audio")
+    def read_aloud(event_id: int, chat: Current, store: Stored) -> StreamingResponse:
+        """A reply read aloud in the chat's voice, as MP3."""
+        event = next((e for e in store.events(chat.id) if e.id == event_id), None)
+        if event is None or event.kind != "assistant" or not event.text:
+            raise HTTPException(404, "No such reply.")
+        return _audio(voice.speak(event.text, settings_of(chat).voice))
+
+    @app.get("/api/voices")
+    def voices() -> VoicesView:
+        try:
+            return VoicesView(voices=voice.voices())
+        except voice.VoiceUnavailable as error:
+            # Often an API key without permission to list voices. Speaking
+            # still works, so offer voices every account has.
+            return VoicesView(voices=voice.PREMADE, note=str(error))
+
+    @app.get("/api/voices/{voice_id}/sample")
+    def sample(voice_id: str, speed: float = 1.0) -> StreamingResponse:
+        """A sentence in a voice, to hear it before choosing it."""
+        try:
+            chosen = defaults().voice.model_copy(update={"voice_id": voice_id})
+            chosen = voice.VoiceSettings.model_validate(
+                {**chosen.model_dump(), "speed": speed}
+            )
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        return _audio(voice.speak(voice.SAMPLE, chosen))
 
     @app.get("/api/models")
     def models() -> list[ModelInfo]:
@@ -448,3 +503,26 @@ def _models(chosen: Settings, taken: Turn, router: route.Router | None) -> dict:
     if llm.view_reply(taken.runs) is None:
         used["reply"] = chosen.reply_model or chosen.model
     return used
+
+
+def _voiced[T](call: Callable[[], T]) -> T:
+    """Run a speech call, turning its failure into a response that says why."""
+    try:
+        return call()
+    except voice.VoiceUnavailable as error:
+        raise HTTPException(502 if voice.available() else 503, str(error)) from error
+
+
+def _audio(pieces: Iterator[bytes]) -> StreamingResponse:
+    """Stream speech. The first piece is fetched before answering, so a
+    refusal is an error response and not a broken stream."""
+    first = _voiced(lambda: next(pieces, b""))
+
+    def rest() -> Iterator[bytes]:
+        yield first
+        try:
+            yield from pieces
+        except voice.VoiceUnavailable:
+            return  # cut short; the listener hears what there was
+
+    return StreamingResponse(rest(), media_type="audio/mpeg")
