@@ -56,6 +56,15 @@ on 2020 to 2024", "hide Ford", "bring Ford back", "zoom out", "show
 everything again". The zoom and hidden series are saved with the chart, like
 its view, and a Reset link under the title undoes them.
 
+### Asking about a chart
+
+A follow-up like "what does this reveal", "which make was highest in 2020",
+or "when did Kia overtake Ford" is answered in words from the rows of the
+chart on screen (or the one you name). Nothing is re-planned or redrawn, so
+it takes a second or two. Questions that need data no chart has still make a
+chart, and "why" questions get what the data shows plus something to chart
+next, since the data cannot show causes.
+
 ### Sub-charts
 
 Filtering a chart ("just Ford and Kia", "only since 2022", "the top five")

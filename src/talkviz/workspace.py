@@ -135,7 +135,16 @@ class ShowChart(_Action):
     chart_id: str
 
 
-AnyAction = CreateChart | NarrowChart | UpdateChart | SetView | SetLens | ShowChart
+class Discuss(_Action):
+    """Answer a question about what an existing chart shows. Changes nothing."""
+
+    op: Literal["discuss"]
+    chart_id: str
+
+
+AnyAction = (
+    CreateChart | NarrowChart | UpdateChart | SetView | SetLens | ShowChart | Discuss
+)
 Action = Annotated[AnyAction, Field(discriminator="op")]
 
 
@@ -178,7 +187,7 @@ class Workspace(BaseModel):
                 parent=current.id,
                 narrow=Narrow(where=action.where, top=action.top, by=action.by),
             )
-        if isinstance(action, ShowChart):
+        if isinstance(action, ShowChart | Discuss):
             return current
         if isinstance(action, SetView):
             # The spec's own kind is the default, stored as no view.

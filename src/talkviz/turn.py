@@ -14,6 +14,7 @@ from talkviz.route import Router, Seen, Shortcut
 from talkviz.sql import QueryRejected
 from talkviz.workspace import (
     Chart,
+    Discuss,
     Lens,
     SetView,
     ShowChart,
@@ -135,8 +136,15 @@ def _shortcut(
     again = found.op == "show_chart" and found.chart_ids == (focus,)
     if again and charts[0].lens is not None:
         found = Shortcut("navigate", found.chart_ids)
-    if found.op == "show_chart":
-        shows = [ShowChart(op="show_chart", chart_id=chart.id) for chart in charts]
+    if found.op in ("show_chart", "discuss"):
+        # Showing needs no model at all. A question about a chart skips the
+        # planner and goes straight to the reply, written from its rows.
+        shows: list[ShowChart | Discuss] = [
+            ShowChart(op="show_chart", chart_id=chart.id)
+            if found.op == "show_chart"
+            else Discuss(op="discuss", chart_id=chart.id)
+            for chart in charts
+        ]
         runs = [
             ChartRun(workspace.resolve(show), result, show.op)
             for show, result in zip(shows, results, strict=True)
