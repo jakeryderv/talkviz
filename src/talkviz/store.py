@@ -83,6 +83,14 @@ class Run(BaseModel):
     ran_at: str
 
 
+class Draft(BaseModel):
+    """A reply the model wrote that was not used."""
+
+    text: str
+    unsupported: list[str]
+    """The figures in it that are not in the query results."""
+
+
 class Event(BaseModel):
     """One entry in a chat's feed.
 
@@ -96,6 +104,10 @@ class Event(BaseModel):
     text: str | None = None
     verified: bool | None = None
     """Assistant only: False if the reply is a fallback or an error message."""
+    rejected: list[Draft] | None = None
+    """Assistant only: drafts that failed the number check, if any did."""
+    error: str | None = None
+    """Assistant only: why no plan could be made, if none could."""
     op: str | None = None
     chart_id: str | None = None
     revision: int | None = None

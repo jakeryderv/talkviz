@@ -164,6 +164,7 @@ def test_speak_rejects_numbers_that_are_not_in_the_results(manifest, con):
     spoken = llm.speak(speaker, "sales by category?", manifest, planned, [])
     assert (spoken.text, spoken.verified) == ("Games lead with 105 in sales.", True)
     assert "250" in speaker.sent(1)
+    assert spoken.rejected == [llm.Rejected("Games lead with 250 in sales.", ["250"])]
     # The results reached the model.
     assert "games | 105.0" in speaker.sent(0)
 
@@ -185,6 +186,7 @@ def test_speak_falls_back_when_the_numbers_never_check_out(manifest, con):
     speaker = scripted(*["Games made 999."] * 3)
     spoken = llm.speak(speaker, "sales?", manifest, planned, [])
     assert (spoken.text, spoken.verified) == ("Here is Sales by category.", False)
+    assert spoken.rejected == [llm.Rejected("Games made 999.", ["999"])] * 3
 
 
 class Streamed(FunctionModel):

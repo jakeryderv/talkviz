@@ -208,3 +208,18 @@ def test_the_charts_of_the_latest_turn_are_shown_together(source):
         == "Here are Sales by category and Orders, side by side."
     )
     assert app.get(f"/api/chats/{chat_id}").json()["shown"] == ["c1", "c2"]
+
+
+def test_an_unverified_reply_keeps_the_drafts_and_figures_that_failed(source):
+    app = client({"actions": [create()]}, *["Games made 999."] * 3)
+    chat_id = app.post("/api/chats", json={}).json()["id"]
+    turn = app.post(f"/api/chats/{chat_id}/turns", json={"text": "sales?"}).json()
+    reply = turn["events"][-1]
+    assert (reply["text"], reply["verified"]) == ("Here is Sales by category.", False)
+    assert (
+        reply["rejected"] == [{"text": "Games made 999.", "unsupported": ["999"]}] * 3
+    )
+    assert (
+        app.get(f"/api/chats/{chat_id}").json()["events"][-1]["rejected"]
+        == reply["rejected"]
+    )

@@ -51,6 +51,9 @@ export type FeedEvent = {
   kind: "user" | "assistant" | "chart";
   text?: string | null;
   verified?: boolean | null;
+  /** Draft replies that failed the number check, with the figures at fault. */
+  rejected?: { text: string; unsupported: string[] }[] | null;
+  error?: string | null;
   op?: string | null;
   chart_id?: string | null;
   revision?: number | null;
