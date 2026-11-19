@@ -20,6 +20,7 @@ from talkviz.workspace import Chart, Workspace
 
 WEB = Path(__file__).parent / "web"
 TITLE_LENGTH = 60
+MAX_SHOWN = 4  # charts side by side
 
 
 class SourceInfo(BaseModel):
@@ -44,8 +45,9 @@ class ChatView(BaseModel):
     chat: Chat
     charts: list[ChartView]
     events: list[Event]
-    focus: str | None
-    """Id of the chart to show: the one most recently created, changed, or shown."""
+    shown: list[str]
+    """Ids of the charts to show: those the latest turn created, changed, or
+    showed. More than one is drawn side by side."""
 
 
 class NewChat(BaseModel):
@@ -72,7 +74,7 @@ class TurnView(BaseModel):
     events: list[Event]
     charts: list[ChartView]
     """The charts the turn created, changed, or showed."""
-    focus: str | None
+    shown: list[str]
 
 
 def create_app(model: Model | None = None, store: Store | None = None) -> FastAPI:
@@ -129,7 +131,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
             chat=chat,
             charts=_views(store, chat.id, store.charts(chat.id)),
             events=events,
-            focus=_focus(events),
+            shown=_shown(events),
         )
 
     @app.patch("/api/chats/{chat_id}")
@@ -168,7 +170,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     _exchanges(history),
                     speaker=app.state.speaker,
                     router=app.state.router,
-                    focus=_focus(history),
+                    focus=(_shown(history) or [None])[-1],
                     seen=_seen(_views(store, chat.id, workspace.charts)),
                 )
         except llm.ModelFailed as error:
@@ -178,7 +180,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     chat.id, "assistant", text=reply, verified=False, error=str(error)
                 )
             )
-            return TurnView(chat=chat, events=events, charts=[], focus=None)
+            return TurnView(chat=chat, events=events, charts=[], shown=[])
         for run in taken.runs:
             store.save_chart(chat.id, run.chart)
             saved = store.save_run(chat.id, run.chart, run.result, version)
@@ -204,7 +206,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
             chat=chat,
             events=events,
             charts=_views(store, chat.id, touched),
-            focus=_focus(events),
+            shown=_shown(events),
         )
 
     @app.post("/api/chats/{chat_id}/charts/{chart_id}/run")
@@ -295,8 +297,20 @@ def _seen(charts: list[ChartView]) -> dict[str, route.Seen]:
     }
 
 
-def _focus(events: list[Event]) -> str | None:
-    return next((e.chart_id for e in reversed(events) if e.kind == "chart"), None)
+def _shown(events: list[Event]) -> list[str]:
+    """The charts touched by the latest turn that touched any, oldest first."""
+    last = next(
+        (i for i in reversed(range(len(events))) if events[i].kind == "chart"), None
+    )
+    if last is None:
+        return []
+    found: list[str] = []
+    for event in reversed(events[: last + 1]):
+        if event.kind != "chart":
+            break
+        if event.chart_id and event.chart_id not in found:
+            found.insert(0, event.chart_id)
+    return found[-MAX_SHOWN:]
 
 
 def _exchanges(events: list[Event]) -> list[Exchange]:
