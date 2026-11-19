@@ -1,0 +1,38 @@
+[project]
+name = "talkviz"
+version = "0.0.0"
+description = "Talk to your data and see it charted."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Jake Van Slyke", email = "jakervanslyke@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=2.0.0",
+    "platformdirs>=4.14.7",
+    "pydantic>=2.14.3",
+    "pydantic-ai-slim[openrouter]>=2.71.0",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "sqlglot>=30.33.0",
+]
+
+[project.scripts]
+talkviz = "talkviz.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "ruff>=0.17.5",
+    "ty>=0.0.107",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
