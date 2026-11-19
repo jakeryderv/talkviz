@@ -1,0 +1,192 @@
+"""The model calls, driven by scripted models instead of a real one."""
+
+import json
+
+import pytest
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+from talkviz import llm
+from talkviz.llm import Exchange
+from talkviz.turn import take_turn
+from talkviz.workspace import Workspace
+
+TOTALS = "SELECT category, sum(amount) AS total FROM orders GROUP BY category"
+
+
+def create(title="Sales by category", sql=TOTALS, spec=None):
+    spec = spec or {"kind": "bar", "x": "category", "y": "total"}
+    return {"op": "create_chart", "title": title, "sql": sql, "spec": spec}
+
+
+class Scripted(FunctionModel):
+    """A model that gives the replies in order and records what it was sent."""
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.seen: list[list[ModelMessage]] = []
+        super().__init__(self.respond)
+
+    def respond(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        self.seen.append(list(messages))
+        reply = self.replies.pop(0)
+        text = reply if isinstance(reply, str) else json.dumps(reply)
+        return ModelResponse(parts=[TextPart(text)])
+
+    def sent(self, call: int) -> str:
+        """The latest message sent to the model before its call-th reply."""
+        return str(getattr(self.seen[call][-1].parts[-1], "content", ""))
+
+
+scripted = Scripted
+
+
+def test_plan_runs_the_query_and_returns_the_chart(manifest, con):
+    model = scripted({"actions": [create()]})
+    planned = llm.plan(model, "sales by category?", manifest, con, Workspace(), [])
+    [run] = planned.runs
+    assert (run.chart.id, run.chart.revision, run.op) == ("c1", 1, "create_chart")
+    assert sorted(run.result.rows) == [
+        ("books", 40.5),
+        ("games", 105.0),
+        ("toys", 35.0),
+    ]
+
+
+def test_plan_instructions_ground_the_model_in_the_manifest(manifest, con):
+    model = scripted({"actions": [create()]})
+    llm.plan(model, "sales?", manifest, con, Workspace(), [])
+    instructions = getattr(model.seen[0][0], "instructions", None)
+    assert instructions is not None
+    for expected in (
+        "Shop orders",
+        "### orders",
+        "amount (DOUBLE)",
+        "books, games, toys",
+        "Refunds are not included.",
+    ):
+        assert expected in instructions
+
+
+@pytest.mark.parametrize(
+    ("bad", "reason"),
+    [
+        (create(sql="SELECT token FROM secrets"), "Unknown table 'secrets'"),
+        (create(sql="DELETE FROM orders"), "Only SELECT"),
+        (create(sql="SELECT category, price FROM orders"), "price"),
+        (
+            create(spec={"kind": "line", "x": "category", "y": "total"}),
+            "must be number or time",
+        ),
+        (
+            create(spec={"kind": "bar", "x": "category", "y": "sales"}),
+            "'sales' is not in",
+        ),
+        ({"op": "show_chart", "chart_id": "c9"}, "no chart 'c9'"),
+    ],
+)
+def test_plan_sends_problems_back_and_accepts_the_fix(bad, reason, manifest, con):
+    model = scripted({"actions": [bad]}, {"actions": [create()]})
+    planned = llm.plan(model, "sales by category?", manifest, con, Workspace(), [])
+    assert reason in model.sent(1)
+    assert [run.chart.title for run in planned.runs] == ["Sales by category"]
+
+
+def test_plan_gives_up_after_repeated_failures(manifest, con):
+    bad = {"actions": [create(sql="SELECT * FROM secrets")]}
+    with pytest.raises(llm.ModelFailed):
+        llm.plan(scripted(bad, bad, bad), "secrets?", manifest, con, Workspace(), [])
+
+
+def test_plan_may_decline_with_a_note_but_not_with_nothing(manifest, con):
+    model = scripted(
+        {"actions": []}, {"actions": [], "note": "There is no weather data."}
+    )
+    planned = llm.plan(model, "what's the weather?", manifest, con, Workspace(), [])
+    assert planned.runs == []
+    assert planned.plan.note == "There is no weather data."
+    assert "at least one action" in model.sent(1)
+
+
+def test_speak_rejects_numbers_that_are_not_in_the_results(manifest, con):
+    planner = scripted({"actions": [create()]})
+    planned = llm.plan(planner, "sales by category?", manifest, con, Workspace(), [])
+    speaker = scripted("Games lead with 250 in sales.", "Games lead with 105 in sales.")
+    spoken = llm.speak(speaker, "sales by category?", manifest, planned, [])
+    assert (spoken.text, spoken.verified) == ("Games lead with 105 in sales.", True)
+    assert "250" in speaker.sent(1)
+    # The results reached the model.
+    assert "games | 105.0" in speaker.sent(0)
+
+
+def test_speak_falls_back_when_the_numbers_never_check_out(manifest, con):
+    planner = scripted({"actions": [create()]})
+    planned = llm.plan(planner, "sales?", manifest, con, Workspace(), [])
+    speaker = scripted(*["Games made 999."] * 3)
+    spoken = llm.speak(speaker, "sales?", manifest, planned, [])
+    assert (spoken.text, spoken.verified) == ("Here is Sales by category.", False)
+
+
+def test_turns_build_up_a_workspace_and_edit_charts_in_place(manifest, con):
+    workspace, history = Workspace(), list[Exchange]()
+    model = scripted(
+        {"actions": [create()]},
+        "Games lead at 105.",
+        {
+            "actions": [
+                {"op": "update_chart", "chart_id": "c1", "spec": {"kind": "table"}}
+            ]
+        },
+        "Here it is as a table.",
+        {
+            "actions": [
+                create(
+                    title="Orders",
+                    sql="SELECT count(*) AS orders FROM orders",
+                    spec={"kind": "stat", "value": "orders", "label": "orders"},
+                )
+            ]
+        },
+        "There are 6 orders.",
+        {
+            "actions": [
+                {"op": "update_chart", "chart_id": "c1", "title": "Category sales"},
+                {"op": "show_chart", "chart_id": "c2"},
+            ]
+        },
+        "Renamed, and here are the 6 orders again.",
+    )
+    for question in (
+        "sales by category?",
+        "make that a table",
+        "how many orders?",
+        "rename the first, show orders",
+    ):
+        turn = take_turn(model, question, manifest, con, workspace, history)
+    assert [(c.id, c.title, c.spec.kind, c.revision) for c in workspace.charts] == [
+        ("c1", "Category sales", "table", 3),
+        ("c2", "Orders", "stat", 1),
+    ]
+    assert workspace.charts[0].sql == TOTALS  # untouched fields are kept
+    assert [e.reply for e in history][-1] == "Renamed, and here are the 6 orders again."
+    assert [run.op for run in turn.runs] == ["update_chart", "show_chart"]
+    # Later turns are told about the charts and the conversation so far.
+    prompt = model.sent(6)
+    assert "c1: 'Sales by category'" in prompt and "User: how many orders?" in prompt
+
+
+def test_two_charts_created_in_one_turn_get_distinct_ids(manifest, con):
+    second = create(
+        title="Orders",
+        sql="SELECT count(*) AS orders FROM orders",
+        spec={"kind": "table"},
+    )
+    model = scripted({"actions": [create(), second]})
+    planned = llm.plan(model, "both", manifest, con, Workspace(), [])
+    assert [run.chart.id for run in planned.runs] == ["c1", "c2"]
+
+
+def test_duplicate_titles_are_sent_back(manifest, con):
+    model = scripted({"actions": [create(), create()]}, {"actions": [create()]})
+    llm.plan(model, "twice", manifest, con, Workspace(), [])
+    assert "already titled 'Sales by category'" in model.sent(1)
