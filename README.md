@@ -35,6 +35,11 @@ OpenRouter model id); the default is `anthropic/claude-opus-5.5`.
 `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); unset, each model uses its
 own default. `--model` and `--effort` override both for one command.
 
+The reply can come from a different, faster model than the one that plans
+the charts, since every number it says is checked against the results:
+`TALKVIZ_SPEECH_MODEL` and `TALKVIZ_SPEECH_EFFORT` (or `--speech-model` and
+`--speech-effort` on `ask`). Unset, the planning model also replies.
+
 ## Use
 
 Register a DuckDB database with the manifest that describes it, then ask:
