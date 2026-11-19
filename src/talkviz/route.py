@@ -158,8 +158,10 @@ def _state(
     question: str, workspace: Workspace, focus: str | None, seen: dict[str, Seen]
 ) -> dict:
     charts = []
-    for number, chart in enumerate(workspace.charts, start=1):
-        entry: dict = {"number": number, "id": chart.id, "title": chart.title}
+    for chart in workspace.charts:
+        entry: dict = {"number": chart.label, "id": chart.id, "title": chart.title}
+        if chart.parent:
+            entry["sub_chart_of"] = chart.parent.removeprefix("c")
         entry["drawn_as"] = chart.shown
         if chart.id in seen:
             entry["columns"] = seen[chart.id].columns
@@ -180,7 +182,7 @@ def _questions(workspace: Workspace) -> dict:
         chart.id: {
             "type": "noul",
             "instructions": (
-                f"Is the user referring to chart {number}, titled {chart.title!r}?"
+                f"Is the user referring to chart {chart.label}, titled {chart.title!r}?"
             ),
             "criteria": {
                 "true": (
@@ -191,7 +193,7 @@ def _questions(workspace: Workspace) -> dict:
                 "false": "They do not mean this chart.",
             },
         }
-        for number, chart in enumerate(workspace.charts, start=1)
+        for chart in workspace.charts
     }
     return {
         "route": {

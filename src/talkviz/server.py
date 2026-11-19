@@ -14,10 +14,10 @@ from talkviz import llm, route
 from talkviz.charts import ChartSpec, views
 from talkviz.llm import Exchange, Model
 from talkviz.sources import Source, list_sources, load_source
-from talkviz.sql import QueryRejected, QueryResult, ResultColumn, check_and_run
+from talkviz.sql import QueryRejected, QueryResult, ResultColumn
 from talkviz.store import Chat, Event, Run, Store
 from talkviz.turn import take_turn
-from talkviz.workspace import Chart, Workspace
+from talkviz.workspace import Chart, Workspace, run_chart
 
 WEB = Path(__file__).parent / "web"
 TITLE_LENGTH = 60
@@ -198,6 +198,19 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     view=run.chart.view if run.op == "set_view" else None,
                 )
             )
+        # Sub-charts that keep rows of a chart this turn changed follow it.
+        changed = {run.chart.id for run in taken.runs if run.op == "update_chart"}
+        for child in workspace.charts:
+            if child.narrow and child.parent in changed and child not in touched:
+                child = child.model_copy(update={"sql": workspace.source(child)})
+                try:
+                    with source.connect() as con:
+                        result = run_chart(con, source.manifest, workspace, child)
+                except (QueryRejected, ValueError):
+                    continue  # it no longer applies; it says so when opened
+                store.save_chart(chat.id, child)
+                store.save_run(chat.id, child, result, version)
+                touched.append(child)
         events.append(
             store.add_event(
                 chat.id,
@@ -217,15 +230,16 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
     @app.post("/api/chats/{chat_id}/charts/{chart_id}/run")
     def rerun(chart_id: str, chat: Current, store: Stored) -> ChartView:
         """Run a chart again on the current data. Says nothing in the feed."""
-        chart = next((c for c in store.charts(chat.id) if c.id == chart_id), None)
+        workspace = Workspace(charts=store.charts(chat.id))
+        chart = workspace.get(chart_id)
         if chart is None:
             raise HTTPException(404, "No such chart.")
         source = _source(chat)
         try:
             with source.connect() as con:
-                result = check_and_run(con, chart.sql, source.manifest)
+                result = run_chart(con, source.manifest, workspace, chart)
                 version = source.data_version(con)
-        except QueryRejected as error:
+        except (QueryRejected, ValueError) as error:
             # The data or its manifest changed under a saved chart.
             raise HTTPException(409, f"This chart no longer runs: {error}") from error
         run = store.save_run(chat.id, chart, result, version)

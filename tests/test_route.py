@@ -88,7 +88,7 @@ def test_only_confident_redraws_and_shows_are_shortcuts(given, expected):
     state = sent[0]["state"]
     assert (state["user_says"], state["chart_on_screen"]) == ("make it a donut", "c1")
     assert state["charts_in_order_created"][0] == {
-        "number": 1,
+        "number": "1",
         "id": "c1",
         "title": "Sales by category",
         "drawn_as": "bar",

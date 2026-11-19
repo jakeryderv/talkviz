@@ -35,12 +35,21 @@ export type Kind = Spec["kind"];
 /** A zoom along the x axis (both ends or neither) and the series not drawn. */
 export type Lens = { start: string | null; end: string | null; hidden: string[] };
 
+export type Condition = { column: string; values?: string[] | null; min?: string | null; max?: string | null };
+export type Narrow = { where: Condition[]; top?: number | null; by?: string | null };
+
 export type Chart = {
   id: string;
   title: string;
   sql: string;
   spec: Spec;
   revision: number;
+  /** The chart this sub-chart was made from. Its id is the parent's plus a letter. */
+  parent: string | null;
+  /** Set when a sub-chart keeps rows of its parent's result instead of querying. */
+  narrow: Narrow | null;
+  /** The parent's revision a sub-chart with its own query was made against. */
+  based_on: number | null;
   /** What part is in view, when not all of it. Saved with the chart. */
   lens: Lens | null;
   /** The kind it is drawn as, when not the spec's own. Saved with the chart. */

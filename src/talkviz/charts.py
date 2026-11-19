@@ -6,6 +6,7 @@ only ever handed charts it can render. views() lists the other ways the same
 result could be drawn, which the interface offers as a switch.
 """
 
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
@@ -159,6 +160,106 @@ def views(spec: Spec, result: QueryResult) -> list[Spec]:
             found.append(other)
     table = Table(kind="table")
     return found if table in found else [*found, table]
+
+
+class Condition(BaseModel):
+    """Rows to keep, by one column: those with one of `values`, or those from
+    `min` to `max` (either end may be left open)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    column: str
+    values: list[str] | None = None
+    min: str | None = None
+    max: str | None = None
+
+
+class Narrow(BaseModel):
+    """A selection of another chart's result rows: which to keep, and
+    optionally only the `top` few by a column. It can pick, sort and limit
+    rows but never re-total them, so what it gives is always a subset."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    where: list[Condition] = []
+    top: int | None = Field(None, ge=1)
+    by: str | None = Field(None, description="Column `top` ranks by, largest first.")
+
+
+def narrowed(result: QueryResult, narrow: Narrow) -> QueryResult:
+    """The rows of `result` the narrowing keeps. Raises ValueError with the
+    reasons if it does not apply to this result."""
+    problems = []
+    names = [column.name for column in result.columns]
+    available = ", ".join(f"{c.name} ({c.kind})" for c in result.columns)
+    rows = list(result.rows)
+    for condition in narrow.where:
+        column = result.column(condition.column)
+        if column is None:
+            problems.append(
+                f"{condition.column!r} is not a column of the chart's result."
+                f" Its columns are: {available}."
+            )
+            continue
+        at = names.index(column.name)
+        if condition.values is not None:
+            known = list(dict.fromkeys(_text(row[at]) for row in result.rows))
+            wanted = set()
+            for value in condition.values:
+                found = next(
+                    (k for k in known if k.lower() == value.strip().lower()), None
+                )
+                if found is None:
+                    problems.append(
+                        f"{value!r} is not a value of {column.name!r}:"
+                        f" {', '.join(known[:40])}."
+                    )
+                wanted.add(found)
+            rows = [row for row in rows if _text(row[at]) in wanted]
+        if condition.min is not None or condition.max is not None:
+            try:
+                low, high = (
+                    _bound(condition.min, column.kind),
+                    _bound(condition.max, column.kind),
+                )
+            except ValueError as wrong:
+                problems.append(f"{column.name!r}: {wrong}")
+                continue
+            rows = [
+                row
+                for row in rows
+                if row[at] is not None
+                and (low is None or _comparable(row[at], column.kind) >= low)
+                and (high is None or _comparable(row[at], column.kind) <= high)
+            ]
+    if narrow.top is not None:
+        column = result.column(narrow.by or "")
+        if column is None or column.kind != "number":
+            problems.append(f"`top` needs `by`, a number column. Columns: {available}.")
+        else:
+            at = names.index(column.name)
+            best = sorted(rows, key=lambda row: (row[at] is None, -(row[at] or 0)))
+            kept = set(map(id, best[: narrow.top]))
+            rows = [row for row in rows if id(row) in kept]  # in the original order
+    if not narrow.where and narrow.top is None:
+        problems.append("Give at least one condition, or `top`.")
+    if problems:
+        raise ValueError(" ".join(problems))
+    return replace(result, rows=rows)
+
+
+def _bound(text: str | None, kind: str) -> Any:
+    if text is None:
+        return None
+    if kind == "number":
+        return float(text)  # ValueError if it is not a number
+    if kind == "time":
+        return text.strip()
+    raise ValueError("a range needs a number or date column; use `values`.")
+
+
+def _comparable(value: Any, kind: str) -> Any:
+    return float(value) if kind == "number" else _text(value)
 
 
 def axis(spec: Spec, result: QueryResult) -> tuple[list[str], list[str]]:

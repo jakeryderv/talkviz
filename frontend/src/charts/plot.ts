@@ -152,6 +152,7 @@ function xy(
   whole: Run,
   t: Theme,
   lens: Lens | null | undefined,
+  palette: string[] | undefined,
 ): Figure {
   const isBar = spec.kind === "bar" || spec.kind === "stacked_bar";
   const view = framed(whole, spec.x, lens);
@@ -179,7 +180,9 @@ function xy(
   const data = groups.map((group, i): Data => {
     const gx = group.rows.map((row) => xs[row] ?? null);
     const gy = group.rows.map((row) => ys[row] ?? null);
-    const color = t.series[i % t.series.length] as string;
+    // A sub-chart draws each series in the colour its parent gives it.
+    const slot = palette && palette.indexOf(group.name) >= 0 ? palette.indexOf(group.name) : i;
+    const color = t.series[slot % t.series.length] as string;
     const name = group.name || measure;
     // A hidden series keeps its colour and legend entry, so it can be brought back.
     const visible = hidden.has(group.name) ? ("legendonly" as const) : true;
@@ -198,7 +201,8 @@ function xy(
     const filled = spec.kind === "area";
     return {
       type: "scatter",
-      mode: "lines",
+      // A lone point has no line to draw, so it gets a marker.
+      mode: gx.length === 1 ? "lines+markers" : "lines",
       name,
       visible,
       x: gx,
@@ -391,15 +395,24 @@ function scatter(spec: Extract<Plotted, { kind: "scatter" | "scatter3d" }>, run:
   return { data, layout };
 }
 
-/** `lens` applies to line, area and bar charts; other kinds show everything. */
-export function figure(spec: Plotted, run: Run, lens?: Lens | null): Figure {
+/** The series names of a line, area or bar chart, in the order they are coloured. */
+export function seriesOf(spec: Spec, run: Run): string[] | undefined {
+  if (!("series" in spec) || !spec.series || !run.columns.some((c) => c.name === spec.series)) return undefined;
+  return split(run, spec.series).map((group) => group.name);
+}
+
+/**
+ * `lens` applies to line, area and bar charts; other kinds show everything.
+ * `palette` is the series order to take colours from, when not the chart's own.
+ */
+export function figure(spec: Plotted, run: Run, lens?: Lens | null, palette?: string[]): Figure {
   const t = theme();
   switch (spec.kind) {
     case "bar":
     case "stacked_bar":
     case "line":
     case "area":
-      return xy(spec, run, t, lens);
+      return xy(spec, run, t, lens, palette);
     case "donut":
     case "treemap":
       return parts(spec, run, t);

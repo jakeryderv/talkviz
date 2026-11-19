@@ -1,5 +1,6 @@
 """One turn of a conversation: a question in, charts and a spoken reply out."""
 
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -10,8 +11,15 @@ from talkviz.charts import axis, fit_lens, views, why_not
 from talkviz.llm import ChartRun, Exchange, Model, Plan, Planned, Rejected
 from talkviz.manifest import Manifest
 from talkviz.route import Router, Seen, Shortcut
-from talkviz.sql import QueryRejected, check_and_run
-from talkviz.workspace import Chart, Lens, SetView, ShowChart, Workspace
+from talkviz.sql import QueryRejected
+from talkviz.workspace import (
+    Chart,
+    Lens,
+    SetView,
+    ShowChart,
+    Workspace,
+    run_chart,
+)
 
 
 @dataclass
@@ -107,6 +115,11 @@ def _shortcut(
     the planner takes the turn and is told so: the chart, the kind, and why.
     It can then change the query or explain what cannot be done.
     """
+    # A chart named by a label nobody has, like "1b", is the planner's to
+    # explain; the router only knows the charts there are.
+    labels = {chart.label for chart in workspace.charts}
+    if set(re.findall(r"\b\d+[a-z]\b", question.lower())) - labels:
+        return None
     found = router.shortcut(question, workspace, focus, seen)
     if found is None or not 0 < len(found.chart_ids) <= llm.MAX_ACTIONS:
         return None
@@ -114,8 +127,8 @@ def _shortcut(
     if len(charts) != len(found.chart_ids):
         return None
     try:
-        results = [check_and_run(con, chart.sql, manifest) for chart in charts]
-    except QueryRejected:
+        results = [run_chart(con, manifest, workspace, chart) for chart in charts]
+    except (QueryRejected, ValueError):
         return None
     # "Show everything again" about the chart already on screen, zoomed or
     # with series hidden, is a request to undo that, not to show it.

@@ -42,15 +42,25 @@ class Scripted(FunctionModel):
 scripted = Scripted
 
 
+def effort(model) -> str | None:
+    return (model.settings or {}).get("openrouter_reasoning", {}).get("effort")
+
+
 def test_openrouter_sets_reasoning_effort(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     monkeypatch.delenv("TALKVIZ_EFFORT", raising=False)
-    assert not (llm.openrouter("some/model").settings or {})
+    assert effort(llm.openrouter("some/model")) is None
     model = llm.openrouter("some/model", "low")
-    assert model.settings == {"openrouter_reasoning": {"effort": "low"}}
+    assert effort(model) == "low"
+    # Every model call is bounded, so one that runs on cannot hold a turn.
+    assert model.settings is not None
+    assert (model.settings["max_tokens"], model.settings["timeout"]) == (
+        llm.MAX_TOKENS,
+        llm.MODEL_TIMEOUT,
+    )
     monkeypatch.setenv("TALKVIZ_EFFORT", "none")
     model = llm.openrouter("some/model")
-    assert model.settings == {"openrouter_reasoning": {"effort": "none"}}
+    assert effort(model) == "none"
     with pytest.raises(ValueError, match="unknown reasoning effort"):
         llm.openrouter("some/model", "lots")
 
@@ -66,14 +76,12 @@ def test_default_models_come_with_their_tuned_effort(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     planner, speaker = llm.openrouter(), llm.speech_openrouter()
     assert planner.model_name == llm.DEFAULT_MODEL
-    assert planner.settings == {"openrouter_reasoning": {"effort": llm.DEFAULT_EFFORT}}
+    assert effort(planner) == llm.DEFAULT_EFFORT
     assert speaker is not None and speaker.model_name == llm.DEFAULT_SPEECH_MODEL
-    assert speaker.settings == {
-        "openrouter_reasoning": {"effort": llm.DEFAULT_SPEECH_EFFORT}
-    }
+    assert effort(speaker) == llm.DEFAULT_SPEECH_EFFORT
     # A model the user picks keeps its own default effort.
     monkeypatch.setenv("TALKVIZ_MODEL", "other/model")
-    assert not (llm.openrouter().settings or {})
+    assert effort(llm.openrouter()) is None
 
 
 def test_speech_openrouter_is_none_unless_a_speech_model_is_set(monkeypatch):
@@ -87,7 +95,7 @@ def test_speech_openrouter_is_none_unless_a_speech_model_is_set(monkeypatch):
     speaker = llm.speech_openrouter()
     assert speaker is not None and speaker.model_name == "small/model"
     # The planner's effort does not leak into the speaker's.
-    assert speaker.settings == {"openrouter_reasoning": {"effort": "none"}}
+    assert effort(speaker) == "none"
 
 
 def test_plan_runs_the_query_and_returns_the_chart(manifest, con):

@@ -22,7 +22,7 @@ from platformdirs import user_data_path
 from pydantic import BaseModel
 
 from talkviz.sql import ColumnKind, QueryResult
-from talkviz.workspace import Chart, Lens
+from talkviz.workspace import Chart, Lens, chart_order
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS charts (
     chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     id TEXT NOT NULL, title TEXT NOT NULL, sql TEXT NOT NULL, spec TEXT NOT NULL,
     revision INTEGER NOT NULL, position INTEGER NOT NULL, view TEXT, lens TEXT,
+    parent TEXT, narrow TEXT, based_on INTEGER,
     PRIMARY KEY (chat_id, id)
 );
 CREATE TABLE IF NOT EXISTS chart_revisions (
@@ -129,11 +130,11 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
             db.executescript(_SCHEMA)
-            # Databases made before charts had a view or a lens.
+            # Databases made before charts had these.
             have = {row["name"] for row in db.execute("PRAGMA table_info(charts)")}
-            for column in ("view", "lens"):
+            for column in ("view", "lens", "parent", "narrow", "based_on"):
                 if column not in have:
-                    db.execute(f"ALTER TABLE charts ADD COLUMN {column} TEXT")
+                    db.execute(f"ALTER TABLE charts ADD COLUMN {column}")
 
     # Chats
 
@@ -172,38 +173,56 @@ class Store:
     # Charts and runs
 
     def charts(self, chat_id: str) -> list[Chart]:
-        """The chat's charts as they are now, in the order they were created."""
+        """The chat's charts as they are now, in the order they were created,
+        each sub-chart after its parent."""
         with self._db() as db:
             rows = db.execute(
-                "SELECT id, title, sql, spec, revision, view, lens FROM charts"
+                "SELECT id, title, sql, spec, revision, view, lens, parent, narrow,"
+                " based_on"
+                " FROM charts"
                 " WHERE chat_id = ?"
                 " ORDER BY position",
                 [chat_id],
             ).fetchall()
-        return [
+        charts = [
             Chart.model_validate(
                 {
                     **dict(row),
                     "spec": json.loads(row["spec"]),
                     "lens": json.loads(row["lens"]) if row["lens"] else None,
+                    "narrow": json.loads(row["narrow"]) if row["narrow"] else None,
                 }
             )
             for row in rows
         ]
+        return sorted(charts, key=chart_order)
 
     def save_chart(self, chat_id: str, chart: Chart) -> None:
         """Store the chart's current definition, keeping each revision."""
         spec = chart.spec.model_dump_json(exclude_none=True)
         values = [chat_id, chart.id, chart.title, chart.sql, spec, chart.revision]
+        narrow = (
+            chart.narrow.model_dump_json(exclude_none=True) if chart.narrow else None
+        )
         with self._db() as db:
             db.execute(
-                "INSERT INTO charts VALUES (?, ?, ?, ?, ?, ?,"
-                " (SELECT count(*) FROM charts WHERE chat_id = ?1), ?, ?)"
+                "INSERT INTO charts (chat_id, id, title, sql, spec, revision,"
+                " position, view, lens, parent, narrow, based_on)"
+                " VALUES (?, ?, ?, ?, ?, ?,"
+                " (SELECT count(*) FROM charts WHERE chat_id = ?1), ?, ?, ?, ?, ?)"
                 " ON CONFLICT (chat_id, id) DO UPDATE SET title = excluded.title,"
                 " sql = excluded.sql, spec = excluded.spec,"
                 " revision = excluded.revision, view = excluded.view,"
-                " lens = excluded.lens",
-                [*values, chart.view, _lens(chart.lens)],
+                " lens = excluded.lens, narrow = excluded.narrow,"
+                " based_on = excluded.based_on",
+                [
+                    *values,
+                    chart.view,
+                    _lens(chart.lens),
+                    chart.parent,
+                    narrow,
+                    chart.based_on,
+                ],
             )
             db.execute(
                 "INSERT OR IGNORE INTO chart_revisions (chat_id, chart_id, title, sql,"

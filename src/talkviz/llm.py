@@ -36,16 +36,19 @@ from pydantic_ai.providers.openrouter import OpenRouterProvider
 from talkviz.charts import KIND_NAMES, check_spec, fit_lens, views, why_not
 from talkviz.manifest import Manifest
 from talkviz.speech import numbers_in, unsupported_numbers
-from talkviz.sql import QueryRejected, QueryResult, check_and_run
+from talkviz.sql import QueryRejected, QueryResult
 from talkviz.workspace import (
     Action,
     Chart,
     CreateChart,
     Lens,
+    NarrowChart,
+    NoRoom,
     SetLens,
     SetView,
     UpdateChart,
     Workspace,
+    run_chart,
 )
 
 Effort = Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
@@ -98,16 +101,20 @@ def speech_openrouter(
     return _openrouter(DEFAULT_SPEECH_MODEL, effort or DEFAULT_SPEECH_EFFORT)
 
 
+MAX_TOKENS = 6000
+MODEL_TIMEOUT = 60.0  # seconds, for one model call
+
+
 def _openrouter(name: str, effort: str | None) -> Model:
-    settings = None
+    # A plan or a reply is short. The limits stop a model that runs on
+    # without end from holding a turn for minutes.
+    settings = OpenRouterModelSettings(max_tokens=MAX_TOKENS, timeout=MODEL_TIMEOUT)
     if effort:
         if effort not in EFFORTS:
             raise ValueError(
                 f"unknown reasoning effort {effort!r}; use one of {', '.join(EFFORTS)}"
             )
-        settings = OpenRouterModelSettings(
-            openrouter_reasoning={"effort": cast(Effort, effort)}
-        )
+        settings["openrouter_reasoning"] = {"effort": cast(Effort, effort)}
     return OpenRouterModel(name, provider=OpenRouterProvider(), settings=settings)
 
 
@@ -329,27 +336,42 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
     runs = []
     for number, action in enumerate(output.actions[:MAX_ACTIONS], start=1):
         where = f"Action {number} ({action.op})"
+        # Charts made earlier in this plan have taken the next ids.
+        made = [run.chart for run in runs if run.op in ("create_chart", "narrow_chart")]
+        ahead = Workspace(charts=[*deps.workspace.charts, *made])
         try:
-            chart = deps.workspace.resolve(action)
+            chart = ahead.resolve(action)
         except KeyError as missing:
             known = ", ".join(c.id for c in deps.workspace.charts) or "none yet"
             problems.append(f"{where}: no chart {missing.args[0]!r}. Charts: {known}.")
             continue
-        if isinstance(action, CreateChart):
-            # Charts created earlier in this plan have taken the next ids.
-            chart = chart.model_copy(
-                update={"id": f"c{len(deps.workspace.charts) + len(runs) + 1}"}
+        except NoRoom as full:
+            told.append(str(full))
+            problems.append(
+                f"{where}: {full} Return no actions and a note telling the user"
+                " that, and offering to make it a new chart of its own instead."
             )
+            continue
         others = {c.title.lower() for c in deps.workspace.charts if c.id != chart.id}
         others |= {r.chart.title.lower() for r in runs if r.chart.id != chart.id}
-        if isinstance(action, CreateChart) and chart.title.lower() in others:
+        if (
+            isinstance(action, CreateChart | NarrowChart)
+            and chart.title.lower() in others
+        ):
             problems.append(
                 f"{where}: another chart is already titled {chart.title!r}."
             )
         try:
-            result = check_and_run(deps.con, chart.sql, deps.manifest)
+            result = run_chart(deps.con, deps.manifest, ahead, chart)
         except QueryRejected as rejected:
             problems.append(f"{where}: query rejected: {rejected}")
+            continue
+        except ValueError as wrong:
+            problems.append(
+                f"{where}: {wrong} narrow_chart can only keep rows the chart's"
+                " result already has. If the user wants rows it does not have,"
+                " use create_chart with `parent` set to this chart and a new query."
+            )
             continue
         problems.extend(f"{where}: {p}" for p in check_spec(chart.spec, result))
         op = action.op
@@ -528,8 +550,19 @@ only to show the same result another way.
 # Actions
 
 - create_chart for a new question.
-- update_chart when they ask to change what a chart they already have shows
-  ("only since 2015", "split it by make"). Send only the fields that change.
+- narrow_chart when they ask to filter or cut down a chart they already have
+  ("only since 2022", "just Ford and Kia", "the top five"). It makes a
+  sub-chart that keeps some rows of that chart's result: `where` picks rows
+  by a column's `values` or its `min` and `max`, and `top` with `by` keeps
+  the largest few. It cannot total or regroup rows. The original stays.
+- create_chart with `parent` when the filter needs rows that chart's result
+  does not have ("only brake complaints" on a chart without a component
+  column): write the full query, and it too becomes a sub-chart.
+- A sub-chart cannot have sub-charts, and a chart can have 26. You are told
+  when there is no room; then offer a new chart of its own.
+- update_chart only when they ask to change the chart itself ("change this
+  one to...", "replace it", "rename it", "split it by make"). Send only the
+  fields that change.
 - set_view when they only want an existing chart drawn another way ("make
   that a donut", "show it as a table"). It reuses the chart's result, so it
   works only for kinds that result fits; you are told if it does not. Never
@@ -565,8 +598,10 @@ charts.
   may round them ("about 12,400"). Do not calculate new figures.
 - Mention a caveat only when it changes how this answer should be read:
 {_bullets(manifest.caveats)}
-- If no chart was made, say why in one sentence, or ask the clarifying
-  question you were given.
+- If no chart was made, give the reason itself in one sentence, without
+  saying that no chart was made, then make the offer or ask the question
+  you were given.
+- If you name a chart by number, use the number given here, like "chart 1a".
 """
 
 
@@ -579,6 +614,12 @@ def _plan_prompt(
     if workspace.charts:
         charts = "\n".join(
             f"- {c.id}: {c.title!r} spec={c.spec.model_dump_json(exclude_none=True)}"
+            + (f" sub-chart of {c.parent}" if c.parent else "")
+            + (
+                f" keeping rows {c.narrow.model_dump_json(exclude_none=True)}"
+                if c.narrow
+                else ""
+            )
             + (f" drawn as {c.view}" if c.view else "")
             + (f" in view: {c.lens.model_dump_json()}" if c.lens else "")
             + f"\n  sql: {' '.join(c.sql.split())}"
@@ -610,7 +651,7 @@ def _speech_prompt(question: str, planned: Planned, history: list[Exchange]) -> 
             else f"{len(result.rows)} rows"
         )
         parts.append(
-            f"Chart {_DID[run.op]}: {run.chart.title!r}"
+            f"Chart {run.chart.label}, {_DID[run.op]}: {run.chart.title!r}"
             f" ({run.chart.shown}, {shown})\n{header}\n{rows}"
             + (f"\n{run.note}" if run.note else "")
         )
@@ -623,6 +664,7 @@ _DID = {
     "show_chart": "shown",
     "set_view": "redrawn",
     "set_lens": "zoomed or series hidden",
+    "narrow_chart": "made as a sub-chart keeping some rows of another",
 }
 
 
