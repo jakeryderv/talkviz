@@ -71,7 +71,12 @@ def connect(database: Path) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect(
         database, read_only=True, config={"enable_external_access": False}
     )
-    con.execute("SET lock_configuration = true")
+    try:
+        con.execute("SET lock_configuration = true")
+    except duckdb.InvalidInputException:
+        # Another open connection to this database already locked it; they
+        # share one configuration, so this one is restricted the same way.
+        pass
     return con
 
 

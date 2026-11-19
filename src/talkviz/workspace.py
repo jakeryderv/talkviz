@@ -8,9 +8,12 @@ around it (its lens), does not.
 
 from typing import Annotated, Literal
 
+import duckdb
 from pydantic import BaseModel, ConfigDict, Field
 
-from talkviz.charts import ChartSpec
+from talkviz.charts import ChartSpec, Condition, Narrow, narrowed
+from talkviz.manifest import Manifest
+from talkviz.sql import QueryResult, check_and_run
 
 
 class Lens(BaseModel):
@@ -33,6 +36,16 @@ class Chart(BaseModel):
     """The kind the chart is drawn as, if not its spec's: one of the kinds
     charts.views() gives for its result. Not part of the definition."""
 
+    parent: str | None = None
+    """Id of the chart this one was made from, if it is a sub-chart. Sub-charts
+    are one level deep and named after their parent: c1a, c1b, ..."""
+    based_on: int | None = None
+    """The parent's revision when a sub-chart with its own query was made or
+    last changed. If the parent has moved on, the sub-chart may be stale."""
+    narrow: Narrow | None = None
+    """For a sub-chart that selects rows of its parent's result. Then `sql`
+    is the parent's, and running the chart runs that and keeps the rows. A
+    sub-chart without it has a query of its own."""
     lens: Lens | None = None
     """How the chart is zoomed and which series are hidden, if not all of it
     is in view. Not part of the definition."""
@@ -40,6 +53,11 @@ class Chart(BaseModel):
     @property
     def shown(self) -> str:
         return self.view or self.spec.kind
+
+    @property
+    def label(self) -> str:
+        """What the user calls it: "1", or "1a" for a sub-chart."""
+        return self.id.removeprefix("c")
 
 
 class _Action(BaseModel):
@@ -69,6 +87,27 @@ class CreateChart(_Action):
     title: str = Field(description="Short and distinct from the chat's other titles.")
     sql: str
     spec: ChartSpec
+    parent: str | None = Field(
+        None,
+        description=(
+            "Id of the existing chart this one filters, when its rows cannot be"
+            " picked from that chart's result and a new query is needed."
+        ),
+    )
+
+
+class NarrowChart(_Action):
+    """Make a sub-chart that keeps some rows of an existing chart's result."""
+
+    op: Literal["narrow_chart"]
+    chart_id: str = Field(description="The chart to take rows from.")
+    title: str = Field(description="Short; says what was kept.")
+    where: list[Condition] = []
+    top: int | None = None
+    by: str | None = None
+    spec: ChartSpec | None = Field(
+        None, description="Only if it should be drawn differently from its parent."
+    )
 
 
 class UpdateChart(_Action):
@@ -96,7 +135,7 @@ class ShowChart(_Action):
     chart_id: str
 
 
-AnyAction = CreateChart | UpdateChart | SetView | SetLens | ShowChart
+AnyAction = CreateChart | NarrowChart | UpdateChart | SetView | SetLens | ShowChart
 Action = Annotated[AnyAction, Field(discriminator="op")]
 
 
@@ -112,15 +151,33 @@ class Workspace(BaseModel):
         """The chart as it would be after the action. Raises KeyError for an
         unknown chart_id."""
         if isinstance(action, CreateChart):
+            parent = None
+            if action.parent is None:
+                top = sum(chart.parent is None for chart in self.charts)
+                new = f"c{top + 1}"
+            else:
+                new = self.sub_id(action.parent)
+                parent = self.get(action.parent)
             return Chart(
-                id=f"c{len(self.charts) + 1}",
+                id=new,
                 title=action.title,
                 sql=action.sql,
                 spec=action.spec,
+                parent=action.parent,
+                based_on=parent.revision if parent else None,
             )
         current = self.get(action.chart_id)
         if current is None:
             raise KeyError(action.chart_id)
+        if isinstance(action, NarrowChart):
+            return Chart(
+                id=self.sub_id(current.id),
+                title=action.title,
+                sql=current.sql,
+                spec=action.spec or current.spec,
+                parent=current.id,
+                narrow=Narrow(where=action.where, top=action.top, by=action.by),
+            )
         if isinstance(action, ShowChart):
             return current
         if isinstance(action, SetView):
@@ -134,16 +191,68 @@ class Workspace(BaseModel):
             return current
         # A new definition starts again in the view its spec names, in full.
         revised = {**changes, "revision": current.revision + 1}
+        if "sql" in changes:
+            revised["narrow"] = None  # a query of its own now
+            parent = self.get(current.parent or "")
+            revised["based_on"] = parent.revision if parent else None
         revised |= {"view": None, "lens": None}
         return Chart.model_validate({**current.model_dump(), **revised})
 
+    def sub_id(self, parent_id: str) -> str:
+        """The id the next sub-chart of `parent_id` would have. Raises KeyError
+        for an unknown chart and NoRoom if it cannot have one."""
+        parent = self.get(parent_id)
+        if parent is None:
+            raise KeyError(parent_id)
+        if parent.parent is not None:
+            raise NoRoom(
+                f"Chart {parent.label} is itself a sub-chart, and sub-charts"
+                " cannot have sub-charts of their own."
+            )
+        taken = sum(chart.parent == parent_id for chart in self.charts)
+        if taken >= len(LETTERS):
+            raise NoRoom(f"Chart {parent.label} already has {taken} sub-charts.")
+        return f"{parent_id}{LETTERS[taken]}"
+
+    def source(self, chart: Chart) -> str:
+        """The query to run for the chart: its parent's, if it narrows one."""
+        parent = self.get(chart.parent or "") if chart.narrow else None
+        return parent.sql if parent else chart.sql
+
     def apply(self, chart: Chart) -> None:
-        """Store a chart from resolve(), replacing the one with the same id."""
+        """Store a chart from resolve(), replacing the one with the same id.
+        Sub-charts are kept after their parent."""
         for index, existing in enumerate(self.charts):
             if existing.id == chart.id:
                 self.charts[index] = chart
                 return
         self.charts.append(chart)
+        self.charts.sort(key=chart_order)
+
+
+LETTERS = "abcdefghijklmnopqrstuvwxyz"
+
+
+class NoRoom(Exception):
+    """A chart cannot be given a sub-chart; the message says why."""
+
+
+def chart_order(chart: Chart) -> tuple[int, str]:
+    """Sort key that puts each sub-chart after its parent: c2, c2a, c2b, c10."""
+    top = (chart.parent or chart.id).removeprefix("c")
+    return int(top), chart.id
+
+
+def run_chart(
+    con: duckdb.DuckDBPyConnection,
+    manifest: Manifest,
+    workspace: Workspace,
+    chart: Chart,
+) -> QueryResult:
+    """Run the chart's query and, for a narrowing sub-chart, keep its rows.
+    Raises QueryRejected, or ValueError if the narrowing no longer applies."""
+    result = check_and_run(con, workspace.source(chart), manifest)
+    return narrowed(result, chart.narrow) if chart.narrow else result
 
 
 def _moved(lens: Lens | None, action: SetLens) -> Lens | None:

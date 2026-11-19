@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Chart, Chat, FeedEvent, Kind, Run, Source } from "./api";
+import type { Chart, Chat, FeedEvent, Kind, Narrow, Run, Source } from "./api";
 import { ChartBody, figure } from "./charts/ChartBody";
 import { date, number, slug } from "./charts/format";
-import { titled } from "./charts/plot";
+import { seriesOf, titled } from "./charts/plot";
 
 const BARS = [
   [51, 112, 32],
@@ -154,8 +154,15 @@ function Empty(props: { source: Source | undefined; busy: boolean; onAsk: (text:
 }
 
 /** The charts on screen: one, or up to four side by side. */
+function palette(all: Chart[], chart: Chart): string[] | undefined {
+  const parent = all.find((c) => c.id === chart.parent);
+  return parent?.run ? seriesOf(parent.spec, parent.run) : undefined;
+}
+
 export function Workspace(props: {
   charts: Chart[];
+  /** Every chart in the chat, shown or not. */
+  all: Chart[];
   source: Source | undefined;
   busy: boolean;
   onAsk: (text: string) => void;
@@ -177,6 +184,7 @@ export function Workspace(props: {
           busy={props.busy}
           beside={count > 1}
           wide={count === 3 && i === 2}
+          palette={palette(props.all, chart)}
           onDraw={props.onDraw}
           onReset={props.onReset}
           onClose={props.onClose}
@@ -193,6 +201,8 @@ function Pane(props: {
   /** Shown beside other charts, so its controls are kept small. */
   beside: boolean;
   wide: boolean;
+  /** Its parent's series, for a sub-chart, so the same series has the same colour. */
+  palette: string[] | undefined;
   onDraw: (chartId: string, kind: Kind) => void;
   onReset: (chartId: string) => void;
   onClose: (chartId: string) => void;
@@ -204,8 +214,9 @@ function Pane(props: {
   const run = chart.run;
   const spec = chart.views.find((view) => view.kind === kind) ?? chart.spec;
   const fig = useMemo(
-    () => (run && spec.kind !== "stat" && spec.kind !== "table" ? figure(spec, run, chart.lens) : null),
-    [spec, run, chart.lens],
+    () => (run && spec.kind !== "stat" && spec.kind !== "table" ? figure(spec, run, chart.lens, props.palette) : null),
+    // The palette is a new array each render; its contents are what matter.
+    [spec, run, chart.lens, props.palette?.join("\n")],
   );
 
   const subtitle = run ? `${source?.title ?? chart.title} · data as of ${run.data_version}` : "";
@@ -337,6 +348,13 @@ function Pane(props: {
       </div>
       {details && (
         <div className="mt-3 max-h-56 overflow-auto rounded-md border border-line bg-surface p-3">
+          {chart.parent && (
+            <p className="mb-2 border-b border-line pb-2 text-xs text-ink-muted">
+              {chart.narrow
+                ? `Rows kept from chart ${chart.parent.slice(1)}'s result: ${kept(chart.narrow)}. Its query:`
+                : `Made from chart ${chart.parent.slice(1)} with a query of its own:`}
+            </p>
+          )}
           <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink">{chart.sql.trim()}</pre>
           {run && (
             <p className="mt-2 border-t border-line pt-2 text-xs text-ink-faint">
@@ -360,7 +378,7 @@ function unverified(event: FeedEvent): string {
   return `${why}, so it was left out. The chart and its numbers are unaffected.`;
 }
 
-const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing", set_view: "Redrawn", set_lens: "Adjusted" };
+const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing", set_view: "Redrawn", set_lens: "Adjusted", narrow_chart: "Filtered" };
 
 export function Feed(props: {
   events: FeedEvent[];
@@ -456,6 +474,17 @@ function Line({ who, text, flagged = null }: { who: "user" | "assistant"; text: 
   );
 }
 
+/** A narrowing in words: "make is FORD or KIA; year from 2022; top 5 by complaints". */
+function kept(narrow: Narrow): string {
+  const parts = narrow.where.map((c) => {
+    if (c.values) return `${c.column} is ${c.values.join(" or ")}`;
+    if (c.min != null && c.max != null) return `${c.column} from ${c.min} to ${c.max}`;
+    return c.min != null ? `${c.column} from ${c.min}` : `${c.column} up to ${c.max}`;
+  });
+  if (narrow.top) parts.push(`top ${narrow.top} by ${narrow.by}`);
+  return parts.join("; ");
+}
+
 export function ChartList(props: {
   charts: Chart[];
   shown: string[];
@@ -469,14 +498,16 @@ export function ChartList(props: {
       <h2 className="px-4 pt-4 pb-2 text-xs font-medium tracking-wide text-ink-faint uppercase">Charts</h2>
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" aria-label="Charts in this chat">
         {props.charts.length === 0 && <p className="px-2.5 text-sm text-ink-faint">Charts you create appear here.</p>}
-        {props.charts.map((chart, i) => {
+        {props.charts.map((chart) => {
           const on = props.shown.includes(chart.id);
+          const parent = props.charts.find((c) => c.id === chart.parent);
+          const stale = parent && chart.based_on !== null && parent.revision > chart.based_on;
           // The only chart showing cannot be taken away, and a full workspace takes no more.
           const can = on ? props.shown.length > 1 : props.shown.length > 0 && !props.full;
           return (
             <div
               key={chart.id}
-              className={`group flex items-start rounded-md ${on ? "bg-raised text-ink-strong" : "text-ink-muted hover:bg-raised/50 hover:text-ink"}`}
+              className={`group flex items-start rounded-md ${chart.parent ? "ml-5" : ""} ${on ? "bg-raised text-ink-strong" : "text-ink-muted hover:bg-raised/50 hover:text-ink"}`}
             >
               <button
                 type="button"
@@ -484,10 +515,13 @@ export function ChartList(props: {
                 aria-current={on ? "true" : undefined}
                 className="flex min-w-0 flex-1 cursor-pointer gap-2.5 px-2.5 py-2 text-left"
               >
-                <span className="w-4 shrink-0 text-xs leading-5 text-ink-faint tabular-nums">{i + 1}</span>
+                <span className="w-4 shrink-0 text-xs leading-5 text-ink-faint tabular-nums">{chart.id.slice(1)}</span>
                 <span className="min-w-0">
                   <span className="block text-sm leading-5">{chart.title}</span>
-                  <span className="block text-xs text-ink-faint">{KINDS[chart.view ?? chart.spec.kind]}</span>
+                  <span className="block text-xs text-ink-faint">
+                    {KINDS[chart.view ?? chart.spec.kind]}
+                    {stale && <span title={`Chart ${parent.id.slice(1)} has changed since this was made from it.`}> · may be out of date</span>}
+                  </span>
                 </span>
               </button>
               {can && (

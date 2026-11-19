@@ -1,6 +1,7 @@
+import duckdb
 import pytest
 
-from talkviz.sql import QueryRejected, check_and_run, describe, lint, run
+from talkviz.sql import QueryRejected, check_and_run, connect, describe, lint, run
 
 
 @pytest.mark.parametrize(
@@ -100,3 +101,13 @@ def test_check_and_run(con, manifest):
     assert result.rows == [(6,)]
     with pytest.raises(QueryRejected):
         check_and_run(con, "SELECT * FROM secrets", manifest)
+
+
+def test_two_connections_can_be_open_at_once_and_both_are_restricted(database):
+    with connect(database) as first, connect(database) as second:
+        for con in (first, second):
+            assert con.execute("SELECT count(*) FROM orders").fetchone() == (6,)
+            with pytest.raises(duckdb.Error):
+                con.execute("SET enable_external_access = true")
+            with pytest.raises(duckdb.Error):
+                con.execute("DELETE FROM orders")

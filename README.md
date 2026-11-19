@@ -56,6 +56,18 @@ on 2020 to 2024", "hide Ford", "bring Ford back", "zoom out", "show
 everything again". The zoom and hidden series are saved with the chart, like
 its view, and a Reset link under the title undoes them.
 
+### Sub-charts
+
+Filtering a chart ("just Ford and Kia", "only since 2022", "the top five")
+leaves it as it is and makes a sub-chart, listed under it and lettered: chart
+1 has 1a, 1b, and so on, so "show me 1a and 1b side by side" works. Where the
+filter can be answered from the rows the chart already has, the sub-chart
+keeps those rows and nothing is totalled again; otherwise it gets a query of
+its own, and its details say which. Changing a chart's query carries through
+to the sub-charts that keep its rows, and marks the others as possibly out of
+date. Sub-charts are one level deep, 26 to a chart; past that, talkviz offers
+a new chart instead. "Change this one" still edits a chart in place.
+
 A model you choose runs at its own default effort unless you set one.
 
 ## Use
