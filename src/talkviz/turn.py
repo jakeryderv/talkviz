@@ -4,10 +4,9 @@ import time
 from dataclasses import dataclass
 
 import duckdb
-from pydantic_ai.models import Model
 
 from talkviz import llm
-from talkviz.llm import ChartRun, Exchange, Plan
+from talkviz.llm import ChartRun, Exchange, Model, Plan
 from talkviz.manifest import Manifest
 from talkviz.workspace import Workspace
 

@@ -10,6 +10,7 @@ model returns and send it back with the reasons when it fails:
 
 import os
 from dataclasses import dataclass, field
+from typing import Literal, cast, get_args
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
@@ -24,7 +25,7 @@ from pydantic_ai import (
     UnexpectedModelBehavior,
 )
 from pydantic_ai.models import Model
-from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from talkviz.charts import check_spec
@@ -34,19 +35,37 @@ from talkviz.sql import QueryRejected, QueryResult, check_and_run
 from talkviz.workspace import Action, Chart, CreateChart, Workspace
 
 DEFAULT_MODEL = "anthropic/claude-opus-5.5"
+# None leaves reasoning at the model's own default.
+DEFAULT_EFFORT: "Effort | None" = None
 MAX_ACTIONS = 3
 RETRIES = 2
 # Rows of each result shown to the model when it writes the reply.
 SPEECH_ROWS = 40
 
 
-def openrouter(name: str | None = None) -> Model:
+Effort = Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
+EFFORTS: tuple[str, ...] = get_args(Effort)
+
+
+def openrouter(name: str | None = None, effort: str | None = None) -> Model:
     """An OpenRouter model; TALKVIZ_MODEL or DEFAULT_MODEL if no name is given.
 
-    Needs OPENROUTER_API_KEY in the environment.
+    `effort` sets how much the model reasons before answering: one of EFFORTS,
+    else TALKVIZ_EFFORT, else DEFAULT_EFFORT. Needs OPENROUTER_API_KEY in the
+    environment.
     """
     name = name or os.environ.get("TALKVIZ_MODEL") or DEFAULT_MODEL
-    return OpenRouterModel(name, provider=OpenRouterProvider())
+    effort = effort or os.environ.get("TALKVIZ_EFFORT") or DEFAULT_EFFORT
+    settings = None
+    if effort:
+        if effort not in EFFORTS:
+            raise ValueError(
+                f"unknown reasoning effort {effort!r}; use one of {', '.join(EFFORTS)}"
+            )
+        settings = OpenRouterModelSettings(
+            openrouter_reasoning={"effort": cast(Effort, effort)}
+        )
+    return OpenRouterModel(name, provider=OpenRouterProvider(), settings=settings)
 
 
 class ModelFailed(Exception):

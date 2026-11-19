@@ -41,6 +41,19 @@ class Scripted(FunctionModel):
 scripted = Scripted
 
 
+def test_openrouter_sets_reasoning_effort(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
+    monkeypatch.delenv("TALKVIZ_EFFORT", raising=False)
+    assert not (llm.openrouter("some/model").settings or {})
+    model = llm.openrouter("some/model", "low")
+    assert model.settings == {"openrouter_reasoning": {"effort": "low"}}
+    monkeypatch.setenv("TALKVIZ_EFFORT", "none")
+    model = llm.openrouter("some/model")
+    assert model.settings == {"openrouter_reasoning": {"effort": "none"}}
+    with pytest.raises(ValueError, match="unknown reasoning effort"):
+        llm.openrouter("some/model", "lots")
+
+
 def test_plan_runs_the_query_and_returns_the_chart(manifest, con):
     model = scripted({"actions": [create()]})
     planned = llm.plan(model, "sales by category?", manifest, con, Workspace(), [])

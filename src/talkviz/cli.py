@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 
 from talkviz import llm
-from talkviz.evaluate import evaluate
+from talkviz.evaluate import evaluate, plan_seconds
 from talkviz.llm import Exchange
 from talkviz.sources import add_source, list_sources, load_source
 from talkviz.turn import Turn, take_turn
@@ -38,7 +38,7 @@ def main() -> None:
     load_dotenv(find_dotenv(usecwd=True))
     try:
         _run(args)
-    except (LookupError, FileNotFoundError, llm.ModelFailed) as error:
+    except (LookupError, FileNotFoundError, ValueError, llm.ModelFailed) as error:
         sys.exit(f"talkviz: {error}")
 
 
@@ -46,6 +46,11 @@ def _common(command: argparse.ArgumentParser) -> None:
     command.add_argument("--source", help="source name, if more than one is registered")
     command.add_argument(
         "--model", help=f"OpenRouter model (default {llm.DEFAULT_MODEL})"
+    )
+    command.add_argument(
+        "--effort",
+        choices=llm.EFFORTS,
+        help="reasoning effort (default: TALKVIZ_EFFORT, else the model's own)",
     )
 
 
@@ -58,20 +63,39 @@ def _run(args: argparse.Namespace) -> None:
     elif args.command == "ask":
         _ask(args)
     elif args.command == "eval":
-        source, model = load_source(args.source), llm.openrouter(args.model)
-        outcomes = evaluate(model, source, args.eval_file)
-        for outcome in outcomes:
-            print(f"{'pass' if outcome.correct else 'FAIL'}  {outcome.question}")
-            if not outcome.correct:
-                print(f"      {outcome.detail}")
-                if outcome.sql:
-                    print(f"      {' '.join(outcome.sql.split())}")
-        correct = sum(outcome.correct for outcome in outcomes)
-        print(f"\n{correct}/{len(outcomes)} correct ({model.model_name})")
+        _eval(args)
+
+
+def _eval(args: argparse.Namespace) -> None:
+    source = load_source(args.source)
+    model = llm.openrouter(args.model, args.effort)
+    outcomes = evaluate(model, source, args.eval_file)
+    for outcome in outcomes:
+        retried = f" ({outcome.calls} calls)" if (outcome.calls or 1) > 1 else ""
+        print(
+            f"{'pass' if outcome.correct else 'FAIL'}  {outcome.seconds:5.1f}s"
+            f"  {outcome.question}{retried}"
+        )
+        if not outcome.correct:
+            print(f"      {outcome.detail}")
+            if outcome.sql:
+                print(f"      {' '.join(outcome.sql.split())}")
+    correct = sum(outcome.correct for outcome in outcomes)
+    median, p90 = plan_seconds(outcomes)
+    print(
+        f"\n{correct}/{len(outcomes)} correct ({_describe(model)});"
+        f" plan median {median:.1f}s, p90 {p90:.1f}s"
+    )
+
+
+def _describe(model: llm.Model) -> str:
+    effort = (model.settings or {}).get("openrouter_reasoning", {}).get("effort")
+    return f"{model.model_name}, effort {effort}" if effort else model.model_name
 
 
 def _ask(args: argparse.Namespace) -> None:
-    source, model = load_source(args.source), llm.openrouter(args.model)
+    source = load_source(args.source)
+    model = llm.openrouter(args.model, args.effort)
     workspace, history = Workspace(), list[Exchange]()
     with source.connect() as con:
         print(f"{source.manifest.title}, data as of {source.data_version(con)}")
