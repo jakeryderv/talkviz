@@ -42,12 +42,14 @@ from talkviz.workspace import Action, Chart, CreateChart, Workspace
 Effort = Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
 EFFORTS: tuple[str, ...] = get_args(Effort)
 
-DEFAULT_MODEL = "anthropic/claude-opus-5.5"
+# Chosen for speed at equal accuracy on the eval: about 1.3 s to plan and 1 s
+# to reply, against about 10 s a turn with one larger model doing both.
+DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"
 # None leaves reasoning at the model's own default.
-DEFAULT_EFFORT: Effort | None = None
+DEFAULT_EFFORT: Effort | None = "low"
 # The model that writes the reply; None means the planning model does.
-DEFAULT_SPEECH_MODEL: str | None = None
-DEFAULT_SPEECH_EFFORT: Effort | None = None
+DEFAULT_SPEECH_MODEL: str | None = "anthropic/claude-haiku-5.5"
+DEFAULT_SPEECH_EFFORT: Effort | None = "none"
 MAX_ACTIONS = 3
 RETRIES = 2
 # Rows of each result shown to the model when it writes the reply.

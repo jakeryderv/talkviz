@@ -30,7 +30,8 @@ cp .env.example .env    # then add your OpenRouter key
 ```
 
 `OPENROUTER_API_KEY` is required. `TALKVIZ_MODEL` picks the model (any
-OpenRouter model id); the default is `anthropic/claude-opus-5.5`.
+OpenRouter model id); the default is `anthropic/claude-sonnet-5.5` at low
+reasoning effort, with `anthropic/claude-haiku-5.5` writing the reply.
 `TALKVIZ_EFFORT` sets how much the model reasons before answering (`none`,
 `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); unset, each model uses its
 own default. `--model` and `--effort` override both for one command.
