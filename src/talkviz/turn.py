@@ -2,6 +2,7 @@
 
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import duckdb
@@ -51,17 +52,20 @@ def take_turn(
     router: Router | None = None,
     focus: str | None = None,
     seen: dict[str, Seen] | None = None,
+    stage: Callable[[str], None] = lambda name: None,
 ) -> Turn:
     """Plan and run the charts, write the reply, and update workspace and history.
 
     `model` plans the charts; `speaker`, if given, writes the reply instead.
     `router`, if given, sees the message first and handles requests that need
     no planning; `focus` tells it which chart is on screen and `seen` what
-    each chart's latest result looks like.
+    each chart's latest result looks like. `stage` is told when each stage
+    begins: "route", "plan", then "speak".
     """
     began = time.perf_counter()
     planned, misfit = None, None
     if router is not None:
+        stage("route")
         found = _shortcut(router, question, manifest, con, workspace, focus, seen or {})
         if isinstance(found, Planned):
             planned = found
@@ -70,6 +74,7 @@ def take_turn(
     started = time.perf_counter()
     shortcut = planned is not None
     if planned is None:
+        stage("plan")
         planned = llm.plan(
             model, question, manifest, con, workspace, history, misfit=misfit
         )
@@ -78,6 +83,7 @@ def take_turn(
     if fixed is not None:
         spoken = llm.Spoken(fixed, verified=True, messages=b"[]")
     else:
+        stage("speak")
         spoken = llm.speak(speaker or model, question, manifest, planned, history)
     done = time.perf_counter()
     for run in planned.runs:

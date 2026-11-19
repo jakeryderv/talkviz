@@ -30,6 +30,8 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState<"defaults" | "chat" | null>(null);
   // Settings chosen for a chat that has not been started yet.
   const [draft, setDraft] = useState<Settings | null>(null);
+  // How far the turn in progress has got: "route", "plan" or "speak".
+  const [stage, setStage] = useState<string | null>(null);
   const [voices, setVoices] = useState<Voices | null>(null);
   // How the screen is divided, remembered in this browser.
   const [chatsHidden, setChatsHidden] = useStored("talkviz.chatsHidden", false);
@@ -110,6 +112,8 @@ export function App() {
   const say = async (text: string) => {
     setError(null);
     setPending(text);
+    setStage(null);
+    let watch: number | undefined;
     try {
       const chat = view?.chat ?? (await api.newChat());
       // A new chat takes the settings chosen for it before it existed, if any.
@@ -117,6 +121,8 @@ export function App() {
       const current = view ?? { chat, settings: own ?? info?.defaults ?? (await api.chat(chat.id)).settings, charts: [], events: [], shown: [] };
       if (!view) setView(current);
       setDraft(null);
+      // Ask how far the turn has got while it runs.
+      watch = window.setInterval(() => api.progress(chat.id).then((p) => setStage(p.stage)).catch(() => {}), 400);
       const turn = await api.say(chat.id, text);
       const changed = new Map(turn.charts.map((c) => [c.id, c]));
       setView({
@@ -142,6 +148,7 @@ export function App() {
     } catch (e) {
       fail(e);
     } finally {
+      window.clearInterval(watch);
       setPending(null);
     }
   };
@@ -229,7 +236,7 @@ export function App() {
           onDoubleClick={() => setFeedShare(FEED_SHARE)}
           className="cursor-row-resize touch-none border-t border-line bg-surface hover:border-primary hover:bg-primary/30 active:border-primary active:bg-primary/40"
         />
-        <Feed events={view?.events ?? []} pending={pending} error={error} running={settings ? summary(settings, mode) : null} mode={mode} chatId={view?.chat.id ?? null} onMode={choose} onInterrupt={hush} onError={setError} onSay={say} onFocus={show} onSettings={() => setSettingsOpen("chat")} />
+        <Feed stage={stage} charts={view?.charts ?? []} events={view?.events ?? []} pending={pending} error={error} running={settings ? summary(settings, mode) : null} mode={mode} chatId={view?.chat.id ?? null} onMode={choose} onInterrupt={hush} onError={setError} onSay={say} onFocus={show} onSettings={() => setSettingsOpen("chat")} />
       </main>
       <ChartList collapsed={listHidden} onCollapse={setListHidden} charts={view?.charts ?? []} shown={shown} full={shown.length >= MAX_SHOWN} onFocus={show} onToggle={toggle} />
       {settingsOpen === "defaults" && info && (

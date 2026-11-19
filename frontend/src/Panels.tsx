@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronDown, Code2, Columns2, Download, Keyboard, Mic, Minus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Settings as SettingsIcon, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { ArrowUp, Box, ChartArea, ChartColumn, ChartColumnStacked, ChartLine, ChartPie, ChartScatter, ChevronDown, Code2, Columns2, Download, Grid3x3, Hash, Keyboard, LayoutGrid, type LucideIcon, Mic, Minus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Search, Settings as SettingsIcon, SlidersHorizontal, Table2, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Chart, Chat, FeedEvent, Kind, Narrow, Run, Source } from "./api";
 import { ChartBody, figure } from "./charts/ChartBody";
@@ -47,6 +47,8 @@ export function Sidebar(props: {
   onCollapse: (collapsed: boolean) => void;
 }) {
   const { chats, active, source } = props;
+  const [query, setQuery] = useState("");
+  const found = query.trim() ? chats.filter((chat) => chat.title.toLowerCase().includes(query.trim().toLowerCase())) : chats;
   if (props.collapsed)
     return (
       <aside className="flex min-h-0 flex-col items-center gap-1 border-r border-line bg-surface py-3">
@@ -84,8 +86,24 @@ export function Sidebar(props: {
           New chat
         </button>
       </div>
-      <nav className="min-h-0 flex-1 overflow-y-auto px-2" aria-label="Chats">
-        {chats.map((chat) => (
+      {chats.length > SEARCH_FROM && (
+        <label className="mx-3 mb-2 flex items-center gap-2 rounded-md bg-bg px-2.5 text-ink-faint focus-within:text-ink">
+          <Search size={13} aria-hidden />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search chats"
+            aria-label="Search chats"
+            className="h-7 min-w-0 flex-1 bg-transparent text-xs text-ink-strong outline-none placeholder:text-ink-faint focus-visible:outline-none"
+          />
+        </label>
+      )}
+      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" aria-label="Chats">
+        {found.length === 0 && query && <p className="px-2.5 py-2 text-xs text-ink-faint">No chats match.</p>}
+        {byDay(found).map(([heading, group]) => (
+          <section key={heading}>
+            <h3 className="px-2.5 pt-3 pb-1 text-xs font-medium text-ink-faint">{heading}</h3>
+            {group.map((chat) => (
           <div
             key={chat.id}
             className={`group flex items-center rounded-md ${chat.id === active ? "bg-raised text-ink-strong" : "text-ink-muted hover:bg-raised/50 hover:text-ink"}`}
@@ -94,7 +112,8 @@ export function Sidebar(props: {
               type="button"
               onClick={() => props.onOpen(chat.id)}
               aria-current={chat.id === active ? "page" : undefined}
-              className="min-w-0 flex-1 cursor-pointer truncate px-2.5 py-2 text-left text-sm"
+              data-tip-at="left"
+              className="min-w-0 flex-1 cursor-pointer truncate px-2.5 py-1.5 text-left text-sm"
             >
               {chat.title}
             </button>
@@ -107,6 +126,8 @@ export function Sidebar(props: {
               <Trash2 size={13} />
             </button>
           </div>
+        ))}
+          </section>
         ))}
       </nav>
       <div className="flex items-end justify-between gap-2 border-t border-line px-4 py-3 text-xs text-ink-faint">
@@ -126,6 +147,45 @@ export function Sidebar(props: {
       </div>
     </aside>
   );
+}
+
+const ICONS: Record<Kind, LucideIcon> = {
+  stat: Hash,
+  table: Table2,
+  bar: ChartColumn,
+  stacked_bar: ChartColumnStacked,
+  line: ChartLine,
+  area: ChartArea,
+  donut: ChartPie,
+  treemap: LayoutGrid,
+  heatmap: Grid3x3,
+  scatter: ChartScatter,
+  scatter3d: Box,
+};
+
+/** A small picture of the kind of chart. */
+function ChartIcon({ kind }: { kind: Kind | undefined }) {
+  const Icon = (kind && ICONS[kind]) || ChartColumn;
+  return <Icon size={13} className="shrink-0 text-primary-bright" aria-hidden />;
+}
+
+/** "14:05" for a time today, "3 Nov, 14:05" for an earlier one. */
+function clock(iso: string): string {
+  const then = new Date(iso);
+  const time = then.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return then.toDateString() === new Date().toDateString() ? time : `${then.toLocaleDateString([], { day: "numeric", month: "short" })}, ${time}`;
+}
+
+/** Chats under a heading for when each was started, newest first. */
+function byDay(chats: Chat[]): [string, Chat[]][] {
+  const midnight = new Date().setHours(0, 0, 0, 0);
+  const groups = new Map<string, Chat[]>();
+  for (const chat of chats) {
+    const days = Math.ceil((midnight - new Date(chat.created_at).getTime()) / 86_400_000);
+    const heading = days <= 0 ? "Today" : days === 1 ? "Yesterday" : days <= 7 ? "Previous 7 days" : days <= 30 ? "Previous 30 days" : "Older";
+    groups.set(heading, [...(groups.get(heading) ?? []), chat]);
+  }
+  return [...groups];
 }
 
 const KINDS: Record<Kind, string> = {
@@ -362,6 +422,10 @@ function unverified(event: FeedEvent): string {
 const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing", set_view: "Redrawn", set_lens: "Adjusted", narrow_chart: "Filtered", discuss: "About" };
 
 export function Feed(props: {
+  /** The stage the turn in progress has reached, if known. */
+  stage: string | null;
+  /** The chat's charts, for the picture beside each mention of one. */
+  charts: Chart[];
   events: FeedEvent[];
   pending: string | null;
   error: string | null;
@@ -379,6 +443,7 @@ export function Feed(props: {
 }) {
   const [text, setText] = useState("");
   const end = useRef<HTMLDivElement>(null);
+  const kindOf = new Map(props.charts.map((chart) => [chart.id, chart.view ?? chart.spec.kind]));
   const busy = props.pending !== null;
   useEffect(() => {
     // Braces matter: scrollIntoView returns a promise in newer browsers, and
@@ -400,20 +465,21 @@ export function Feed(props: {
               key={event.id}
               type="button"
               onClick={() => event.chart_id && props.onFocus(event.chart_id)}
-              className="ml-8 flex cursor-pointer items-center gap-1.5 rounded-full border border-line-strong px-2.5 py-0.5 text-xs text-ink-muted hover:border-primary hover:text-ink"
+              className="ml-8 flex w-fit max-w-full cursor-pointer items-center gap-1.5 rounded-md bg-raised/60 px-2 py-1 text-xs text-ink hover:bg-raised hover:text-ink-strong"
             >
-              <span className="size-1.5 rounded-full bg-primary" />
-              {OPS[event.op ?? ""] ?? "Chart"} · {event.title}
+              <ChartIcon kind={kindOf.get(event.chart_id ?? "")} />
+              <span className="text-ink-faint">{OPS[event.op ?? ""] ?? "Chart"}</span>
+              {event.title}
             </button>
           ) : (
-            <Line key={event.id} who={event.kind} text={event.text ?? ""} flagged={event.kind === "assistant" && event.verified === false ? unverified(event) : null} made={event.kind === "assistant" ? made(event) : null} />
+            <Line key={event.id} who={event.kind} at={event.at} text={event.text ?? ""} flagged={event.kind === "assistant" && event.verified === false ? unverified(event) : null} made={event.kind === "assistant" ? made(event) : null} />
           ),
         )}
         {props.pending && <Line who="user" text={props.pending} />}
         {busy && (
           <div className="flex items-center gap-3 text-ink-muted">
             <Wave size={20} live />
-            <span className="text-sm">Working on it…</span>
+            <span className="text-sm">{STAGES[props.stage ?? ""] ?? "Working on it…"}</span>
           </div>
         )}
         {props.error && <p className="text-sm text-critical">Something went wrong: {props.error}</p>}
@@ -484,6 +550,15 @@ export function Feed(props: {
   );
 }
 
+const SEARCH_FROM = 8; // chats, before a search box is worth its space
+
+/** What is said while each stage of a turn runs. */
+const STAGES: Record<string, string> = {
+  route: "Reading your request…",
+  plan: "Planning the chart and running the query…",
+  speak: "Writing the reply…",
+};
+
 /** How a reply was produced: "claude-sonnet-5.5 → claude-haiku-5.5 · 4.1 s", or "fast path · 0.3 s". */
 function made(event: FeedEvent): string | null {
   if (!event.models || !event.seconds) return null;
@@ -494,14 +569,15 @@ function made(event: FeedEvent): string | null {
   return `${how} · ${total.toFixed(1)} s`;
 }
 
-function Line({ who, text, flagged = null, made = null }: { who: "user" | "assistant"; text: string; flagged?: string | null; made?: string | null }) {
+function Line({ who, text, at, flagged = null, made = null }: { who: "user" | "assistant"; text: string; at?: string; flagged?: string | null; made?: string | null }) {
   return (
-    <div className="flex gap-3">
+    <div className={`flex gap-3 ${who === "user" ? "pt-2" : ""}`}>
       <span className={`w-5 shrink-0 pt-0.5 text-xs font-medium ${who === "user" ? "text-ink-faint" : "text-primary-bright"}`}>
         {who === "user" ? "You" : <Wave size={18} />}
       </span>
-      <p className={`max-w-3xl leading-relaxed ${who === "user" ? "text-ink-muted" : "text-ink-strong"}`} title={made ?? undefined}>
+      <p className={`max-w-3xl leading-relaxed ${who === "user" ? "text-ink-muted" : "text-ink-strong"}`}>
         {text}
+        {who === "user" && at && <span className="ml-2 text-xs whitespace-nowrap text-ink-faint">{clock(at)}</span>}
         {flagged && (
           <span className="ml-2 cursor-help text-xs text-warning underline decoration-dotted underline-offset-2" title={flagged} tabIndex={0}>
             unverified
@@ -573,7 +649,8 @@ export function ChartList(props: {
                 <span className="w-4 shrink-0 text-xs leading-5 text-ink-faint tabular-nums">{chart.id.slice(1)}</span>
                 <span className="min-w-0">
                   <span className="block text-sm leading-5">{chart.title}</span>
-                  <span className="block text-xs text-ink-faint">
+                  <span className="flex items-center gap-1.5 text-xs text-ink-faint">
+                    <ChartIcon kind={chart.view ?? chart.spec.kind} />
                     {KINDS[chart.view ?? chart.spec.kind]}
                     {stale && <span title={`Chart ${parent.id.slice(1)} has changed since this was made from it.`}> · may be out of date</span>}
                   </span>

@@ -146,6 +146,8 @@ export const api = {
   chat: (id: string) => request<ChatView>(`/api/chats/${id}`),
   newChat: (source?: string) => request<Chat>("/api/chats", post({ source })),
   deleteChat: (id: string) => request<void>(`/api/chats/${id}`, { method: "DELETE" }),
+  /** The stage a turn in progress has reached: "route", "plan", "speak", or null. */
+  progress: (id: string) => request<{ stage: string | null }>(`/api/chats/${id}/progress`),
   say: (id: string, text: string) => request<TurnView>(`/api/chats/${id}/turns`, post({ text })),
   setView: (id: string, chartId: string, kind: Kind) =>
     request<Chart>(`/api/chats/${id}/charts/${chartId}/view`, {
