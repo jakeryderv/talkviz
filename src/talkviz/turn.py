@@ -9,7 +9,7 @@ from talkviz import llm
 from talkviz.charts import views, why_not
 from talkviz.llm import ChartRun, Exchange, Model, Plan, Planned
 from talkviz.manifest import Manifest
-from talkviz.route import Router
+from talkviz.route import Router, Seen
 from talkviz.sql import QueryRejected, check_and_run
 from talkviz.workspace import Chart, SetView, ShowChart, Workspace
 
@@ -39,17 +39,19 @@ def take_turn(
     speaker: Model | None = None,
     router: Router | None = None,
     focus: str | None = None,
+    seen: dict[str, Seen] | None = None,
 ) -> Turn:
     """Plan and run the charts, write the reply, and update workspace and history.
 
     `model` plans the charts; `speaker`, if given, writes the reply instead.
     `router`, if given, sees the message first and handles requests that need
-    no planning; `focus` tells it which chart is on screen.
+    no planning; `focus` tells it which chart is on screen and `seen` what
+    each chart's latest result looks like.
     """
     began = time.perf_counter()
     planned, misfit = None, None
     if router is not None:
-        found = _shortcut(router, question, manifest, con, workspace, focus)
+        found = _shortcut(router, question, manifest, con, workspace, focus, seen or {})
         if isinstance(found, Planned):
             planned = found
         else:
@@ -93,6 +95,7 @@ def _shortcut(
     con: duckdb.DuckDBPyConnection,
     workspace: Workspace,
     focus: str | None,
+    seen: dict[str, Seen],
 ) -> Planned | tuple[Chart, str, str] | None:
     """The turn as the router sees it, or None if it should be planned.
 
@@ -101,9 +104,12 @@ def _shortcut(
     the planner takes the turn and is told so: the chart, the kind, and why.
     It can then change the query or explain what cannot be done.
     """
-    found = router.shortcut(question, workspace, focus)
-    chart = workspace.get(found.chart_id) if found else None
-    if found is None or chart is None:
+    found = router.shortcut(question, workspace, focus, seen)
+    # Several charts at once is not something a turn can do yet.
+    if found is None or len(found.chart_ids) != 1:
+        return None
+    chart = workspace.get(found.chart_ids[0])
+    if chart is None:
         return None
     try:
         result = check_and_run(con, chart.sql, manifest)

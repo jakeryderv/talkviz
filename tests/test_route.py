@@ -5,7 +5,7 @@ import pytest
 from test_llm import TOTALS, Scripted
 
 from talkviz.llm import Exchange
-from talkviz.route import Jev, Shortcut
+from talkviz.route import Jev, Seen, Shortcut
 from talkviz.turn import take_turn
 from talkviz.workspace import Chart, Workspace
 
@@ -41,82 +41,61 @@ class Fixed:
     def __init__(self, found: Shortcut | None) -> None:
         self.found = found
 
-    def shortcut(self, question, workspace, focus) -> Shortcut | None:
+    def shortcut(self, question, workspace, focus, seen) -> Shortcut | None:
         return self.found
 
 
+OTHER = CHART.model_copy(update={"id": "c2", "title": "Orders by month"})
+
+
+def answers(route, kind, c1, c2=0.02, sure=0.95):
+    return {
+        "route": answer(route, sure),
+        "kind": answer(kind),
+        "c1": {"type": "noul", "noul": c1},
+        "c2": {"type": "noul", "noul": c2},
+    }
+
+
 @pytest.mark.parametrize(
-    ("answers", "expected"),
+    ("given", "expected"),
     [
-        (
-            {"route": answer("redraw"), "chart": answer("c1"), "kind": answer("donut")},
-            Shortcut("set_view", "c1", "donut"),
-        ),
-        (
-            {
-                "route": answer("show"),
-                "chart": answer("c1"),
-                "kind": answer("none", 0.4),
-            },
-            Shortcut("show_chart", "c1"),
-        ),
+        (answers("redraw", "donut", 0.97), Shortcut("set_view", ("c1",), "donut")),
+        (answers("show", "none", 0.9), Shortcut("show_chart", ("c1",))),
+        (answers("show", "none", 0.9, 0.8), Shortcut("show_chart", ("c1", "c2"))),
         # New questions and changes are the planner's.
-        (
-            {"route": answer("new"), "chart": answer("none"), "kind": answer("none")},
-            None,
-        ),
-        (
-            {"route": answer("change"), "chart": answer("c1"), "kind": answer("none")},
-            None,
-        ),
-        # So is anything it is unsure of, or that names no real chart or kind.
-        (
-            {
-                "route": answer("redraw", 0.6),
-                "chart": answer("c1"),
-                "kind": answer("donut"),
-            },
-            None,
-        ),
-        (
-            {
-                "route": answer("redraw"),
-                "chart": answer("c1", 0.5),
-                "kind": answer("donut"),
-            },
-            None,
-        ),
-        (
-            {
-                "route": answer("redraw"),
-                "chart": answer("c1"),
-                "kind": answer("donut", 0.5),
-            },
-            None,
-        ),
-        (
-            {"route": answer("redraw"), "chart": answer("c1"), "kind": answer("none")},
-            None,
-        ),
-        (
-            {"route": answer("show"), "chart": answer("none"), "kind": answer("none")},
-            None,
-        ),
+        (answers("new", "none", 0.1), None),
+        (answers("change", "none", 0.97), None),
+        # So is anything it is unsure of, or that names no chart or kind.
+        (answers("redraw", "donut", 0.97, sure=0.6), None),
+        (answers("redraw", "donut", 0.5), None),
+        (answers("show", "none", 0.9, 0.5), None),
+        (answers("show", "none", 0.1), None),
+        (answers("redraw", "none", 0.97), None),
+        (answers("redraw", "donut", 0.9, 0.9), None),  # one kind, two charts
     ],
 )
-def test_only_confident_redraws_and_shows_are_shortcuts(answers, expected):
-    router, sent = jev(answers)
-    assert (
-        router.shortcut("make it a donut", Workspace(charts=[CHART]), "c1") == expected
-    )
-    assert sent[0]["state"]["user_says"] == "make it a donut"
-    assert sent[0]["state"]["chart_on_screen"] == "c1"
-    assert set(sent[0]["questions"]["chart"]["criteria"]) == {"c1", "none"}
+def test_only_confident_redraws_and_shows_are_shortcuts(given, expected):
+    router, sent = jev(given)
+    workspace = Workspace(charts=[CHART, OTHER])
+    seen = {"c1": Seen(columns=["category", "total"], views=["donut", "table"])}
+    assert router.shortcut("make it a donut", workspace, "c1", seen) == expected
+    state = sent[0]["state"]
+    assert (state["user_says"], state["chart_on_screen"]) == ("make it a donut", "c1")
+    assert state["charts_in_order_created"][0] == {
+        "number": 1,
+        "id": "c1",
+        "title": "Sales by category",
+        "drawn_as": "bar",
+        "columns": ["category", "total"],
+        "can_also_be_drawn_as": ["donut", "table"],
+    }
+    assert set(sent[0]["questions"]) == {"route", "kind", "c1", "c2"}
 
 
 def test_the_router_is_not_asked_before_there_are_charts():
     router, sent = jev({})
-    assert router.shortcut("sales by category?", Workspace(), None) is None
+    assert router.shortcut("sales by category?", Workspace(), None, {}) is None
     assert sent == []
 
 
@@ -124,7 +103,7 @@ def test_a_failing_service_is_skipped_and_then_left_alone():
     workspace = Workspace(charts=[CHART])
     for router, sent in (jev(None, status=404), jev({"route": "unexpected"})):
         for _ in range(5):
-            assert router.shortcut("make it a donut", workspace, "c1") is None
+            assert router.shortcut("make it a donut", workspace, "c1", {}) is None
         assert len(sent) == 3  # stops asking after three failures in a row
 
 
@@ -138,7 +117,7 @@ def test_a_shortcut_turn_calls_no_language_model(manifest, con):
         con,
         workspace,
         history,
-        router=Fixed(Shortcut("set_view", "c1", "donut")),
+        router=Fixed(Shortcut("set_view", ("c1",), "donut")),
     )
     assert (turn.shortcut, [run.op for run in turn.runs]) == (True, ["set_view"])
     assert turn.reply == "Here's Sales by category as a donut chart."
@@ -151,7 +130,7 @@ def test_a_shortcut_turn_calls_no_language_model(manifest, con):
         con,
         workspace,
         history,
-        router=Fixed(Shortcut("show_chart", "c1")),
+        router=Fixed(Shortcut("show_chart", ("c1",))),
     )
     assert turn.reply == "Here's Sales by category again."
     assert [e.reply for e in history] == [
@@ -164,8 +143,8 @@ def test_a_shortcut_turn_calls_no_language_model(manifest, con):
     "found",
     [
         None,
-        Shortcut("set_view", "c1", "line"),  # categories cannot be a line
-        Shortcut("show_chart", "c9"),  # no such chart
+        Shortcut("set_view", ("c1",), "line"),  # categories cannot be a line
+        Shortcut("show_chart", ("c9",)),  # no such chart
     ],
 )
 def test_what_the_router_cannot_settle_goes_to_the_planner(manifest, con, found):

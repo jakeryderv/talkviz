@@ -169,6 +169,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     speaker=app.state.speaker,
                     router=app.state.router,
                     focus=_focus(history),
+                    seen=_seen(_views(store, chat.id, workspace.charts)),
                 )
         except llm.ModelFailed as error:
             reply = error.reply()
@@ -281,6 +282,17 @@ def _view(chart: Chart, run: Run | None) -> ChartView:
         seconds=run.seconds,
     )
     return ChartView(**chart.model_dump(), run=run, views=views(chart.spec, result))
+
+
+def _seen(charts: list[ChartView]) -> dict[str, route.Seen]:
+    return {
+        chart.id: route.Seen(
+            columns=[column.name for column in chart.run.columns],
+            views=[view.kind for view in chart.views[1:]],
+        )
+        for chart in charts
+        if chart.run is not None
+    }
 
 
 def _focus(events: list[Event]) -> str | None:
