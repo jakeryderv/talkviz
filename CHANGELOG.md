@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/jakeryderv/talkviz/compare/v0.2.0...v0.3.0) (2026-11-19)
+
+
+### Features
+
+* charts fill their pane, with collapsible side columns and a resizable conversation ([#28](https://github.com/jakeryderv/talkviz/issues/28)) ([f646493](https://github.com/jakeryderv/talkviz/commit/f646493d4b31b18e488a3a92c5ce2828238f0068))
+* per-chat settings for models, reasoning effort, and the fast path ([#25](https://github.com/jakeryderv/talkviz/issues/25)) ([ebecd58](https://github.com/jakeryderv/talkviz/commit/ebecd583038ae8891c49062b73d87f3bf2fab565))
+* restyle form controls, add hover labels, and make small text readable ([#29](https://github.com/jakeryderv/talkviz/issues/29)) ([b0d5ad6](https://github.com/jakeryderv/talkviz/commit/b0d5ad6fc32b63f095fcb2b8f74d70c95ba6e884))
+* staged progress, chats grouped by day with search, and chart icons ([#30](https://github.com/jakeryderv/talkviz/issues/30)) ([4938518](https://github.com/jakeryderv/talkviz/commit/4938518519c810fe1d6ac2afca1b5f4e27c17565))
+* voice mode with hold-to-talk, a live waveform, and spoken replies ([#26](https://github.com/jakeryderv/talkviz/issues/26)) ([a068ff4](https://github.com/jakeryderv/talkviz/commit/a068ff40cf983ac7b49bd78d99591fb763014f8d))
+
 ## [0.2.0](https://github.com/jakeryderv/talkviz/compare/v0.1.0...v0.2.0) (2026-11-19)
 
 
