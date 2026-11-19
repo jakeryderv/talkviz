@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronDown, Code2, Download, Keyboard, Mic, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Settings as SettingsIcon, SlidersHorizontal, X } from "lucide-react";
+import { ArrowUp, ChevronDown, Code2, Columns2, Download, Keyboard, Mic, Minus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Settings as SettingsIcon, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Chart, Chat, FeedEvent, Kind, Narrow, Run, Source } from "./api";
 import { ChartBody, figure } from "./charts/ChartBody";
@@ -50,14 +50,14 @@ export function Sidebar(props: {
   if (props.collapsed)
     return (
       <aside className="flex min-h-0 flex-col items-center gap-1 border-r border-line bg-surface py-3">
-        <IconButton label="Show chats" onClick={() => props.onCollapse(false)}>
+        <IconButton tipAt="left" label="Show chats" onClick={() => props.onCollapse(false)}>
           <PanelLeftOpen size={16} />
         </IconButton>
-        <IconButton label="New chat" onClick={props.onNew}>
+        <IconButton tipAt="left" label="New chat" onClick={props.onNew}>
           <Plus size={16} />
         </IconButton>
         <span className="flex-1" />
-        <IconButton label="Settings" onClick={props.onSettings}>
+        <IconButton tipAt="above left" label="Settings" onClick={props.onSettings}>
           <SettingsIcon size={16} />
         </IconButton>
       </aside>
@@ -102,9 +102,9 @@ export function Sidebar(props: {
               type="button"
               aria-label={`Delete chat: ${chat.title}`}
               onClick={() => props.onDelete(chat.id)}
-              className="cursor-pointer px-2 text-ink-faint opacity-0 group-hover:opacity-100 hover:text-critical focus-visible:opacity-100"
+              className="mr-1 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-ink-faint opacity-0 group-hover:opacity-100 hover:bg-line-strong hover:text-critical focus-visible:opacity-100"
             >
-              ×
+              <Trash2 size={13} />
             </button>
           </div>
         ))}
@@ -120,7 +120,7 @@ export function Sidebar(props: {
             </>
           )}
         </div>
-        <IconButton label="Settings" onClick={props.onSettings}>
+        <IconButton tipAt="above left" label="Settings" onClick={props.onSettings}>
           <SettingsIcon size={16} />
         </IconButton>
       </div>
@@ -313,11 +313,11 @@ function Pane(props: {
             { key: "csv", label: "Data (CSV)", onSelect: saveData },
           ]}
         />
-        <IconButton label={details ? "Hide the query" : "Show the query behind this chart"} pressed={details} onClick={() => setDetails((open) => !open)}>
+        <IconButton tipAt="right" label={details ? "Hide the query" : "Show the query behind this chart"} pressed={details} onClick={() => setDetails((open) => !open)}>
           <Code2 size={15} />
         </IconButton>
         {beside && (
-          <IconButton label={`Close ${chart.title}`} onClick={() => props.onClose(chart.id)}>
+          <IconButton tipAt="right" label={`Close ${chart.title}`} onClick={() => props.onClose(chart.id)}>
             <X size={15} />
           </IconButton>
         )}
@@ -457,7 +457,8 @@ export function Feed(props: {
             <button
               type="button"
               onClick={props.onSettings}
-              title="Change the models and voice for this chat"
+              data-tip="Models and voice for this chat"
+              data-tip-at="above left"
               className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs text-ink-muted hover:bg-surface hover:text-ink-strong"
             >
               <SlidersHorizontal size={13} className="shrink-0" aria-hidden />
@@ -470,7 +471,8 @@ export function Feed(props: {
               type="submit"
               disabled={busy || !text.trim()}
               aria-label="Ask"
-              title="Ask"
+              data-tip="Ask"
+              data-tip-at="above right"
               className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-primary text-white hover:bg-primary-bright disabled:cursor-default disabled:bg-raised disabled:text-ink-faint"
             >
               <ArrowUp size={16} />
@@ -535,7 +537,7 @@ export function ChartList(props: {
   if (props.collapsed)
     return (
       <aside className="flex min-h-0 flex-col items-center gap-1 border-l border-line bg-surface py-3">
-        <IconButton label="Show the chart list" onClick={() => props.onCollapse(false)}>
+        <IconButton tipAt="right" label="Show the chart list" onClick={() => props.onCollapse(false)}>
           <PanelRightOpen size={16} />
         </IconButton>
         {props.charts.length > 0 && <span className="text-xs text-ink-muted tabular-nums">{props.charts.length}</span>}
@@ -545,7 +547,7 @@ export function ChartList(props: {
     <aside className="flex min-h-0 flex-col border-l border-line bg-surface">
       <div className="flex items-center py-3 pr-2 pl-4">
         <h2 className="flex-1 text-xs font-medium tracking-wide text-ink-muted uppercase">Charts</h2>
-        <IconButton label="Hide the chart list" onClick={() => props.onCollapse(true)}>
+        <IconButton tipAt="right" label="Hide the chart list" onClick={() => props.onCollapse(true)}>
           <PanelRightClose size={16} />
         </IconButton>
       </div>
@@ -582,10 +584,11 @@ export function ChartList(props: {
                   type="button"
                   onClick={() => props.onToggle(chart.id)}
                   aria-label={on ? `Stop showing ${chart.title}` : `Show ${chart.title} alongside`}
-                  title={on ? "Stop showing" : "Show alongside"}
-                  className="mt-1.5 mr-1.5 cursor-pointer rounded px-1.5 text-sm leading-6 text-ink-faint opacity-0 group-hover:opacity-100 hover:bg-line-strong hover:text-ink-strong focus-visible:opacity-100"
+                  data-tip={on ? "Stop showing" : "Show alongside"}
+                  data-tip-at="right"
+                  className="mt-1.5 mr-1.5 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-ink-faint opacity-0 group-hover:opacity-100 hover:bg-line-strong hover:text-ink-strong focus-visible:opacity-100"
                 >
-                  {on ? "−" : "+"}
+                  {on ? <Minus size={14} /> : <Columns2 size={14} />}
                 </button>
               )}
             </div>

@@ -24,12 +24,13 @@ export function useStored<T>(key: string, initial: T): [T, (value: T) => void] {
 const QUIET = "cursor-pointer rounded-md text-ink-muted hover:bg-raised hover:text-ink-strong disabled:cursor-default disabled:opacity-40";
 
 /** A button that is only an icon; `label` names it for tooltips and screen readers. */
-export function IconButton(props: { label: string; onClick: () => void; children: ReactNode; pressed?: boolean; className?: string }) {
+export function IconButton(props: { label: string; onClick: () => void; children: ReactNode; pressed?: boolean; className?: string; tipAt?: string }) {
   return (
     <button
       type="button"
       aria-label={props.label}
-      title={props.label}
+      data-tip={props.label}
+      data-tip-at={props.tipAt}
       aria-pressed={props.pressed}
       onClick={props.onClick}
       className={`flex size-7 shrink-0 items-center justify-center ${QUIET} ${props.pressed ? "bg-raised text-ink-strong" : ""} ${props.className ?? ""}`}

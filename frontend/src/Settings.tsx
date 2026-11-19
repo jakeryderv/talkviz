@@ -1,4 +1,6 @@
+import { Check, Play, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { IconButton } from "./ui";
 import { api, type ModelInfo, type Settings, type SettingsInfo, type Voices, type VoiceSettings } from "./api";
 
 /** "anthropic/claude-sonnet-5.5" as "claude-sonnet-5.5". */
@@ -48,6 +50,11 @@ export function SettingsPanel(props: {
     return () => window.removeEventListener("keydown", onKey);
   }, [props.onClose]);
 
+  useEffect(() => {
+    const escape = (e: KeyboardEvent) => e.key === "Escape" && props.onClose();
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [props.onClose]);
   return (
     <div
       className={`fixed inset-0 z-20 flex p-4 ${props.anchor === "bar" ? "items-end justify-start pb-24 pl-[256px]" : "items-center justify-center bg-black/60"}`}
@@ -64,16 +71,16 @@ export function SettingsPanel(props: {
           if (valid) props.onSave(draft, asDefault || props.chat === null);
         }}
       >
-        <header className="flex items-baseline justify-between border-b border-line px-5 py-4">
+        <header className="flex items-start justify-between border-b border-line py-3 pr-3 pl-5">
           <div>
             <h2 className="text-base font-semibold text-ink-strong">{props.chat === null ? "Settings" : "This chat"}</h2>
             <p className="mt-0.5 text-xs text-ink-faint">
               {props.chat === null ? "What new chats start with. Chats you already have keep their own." : props.chat}
             </p>
           </div>
-          <button type="button" onClick={props.onClose} aria-label="Close settings" className="cursor-pointer px-1 text-lg text-ink-faint hover:text-ink-strong">
-            ×
-          </button>
+          <IconButton label="Close" tipAt="right" onClick={props.onClose}>
+            <X size={16} />
+          </IconButton>
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-5 py-4">
@@ -125,7 +132,7 @@ export function SettingsPanel(props: {
                 step={0.05}
                 value={draft.voice.speed}
                 onChange={(e) => setVoice({ speed: Number(e.target.value) })}
-                className="mt-1 block w-full accent-[var(--color-primary)]"
+                className="mt-1 block w-full"
               />
             </label>
             <label className="block text-xs text-ink-muted">
@@ -257,7 +264,8 @@ function VoiceField(props: { value: VoiceSettings; voices: Voices | null; canPla
             </option>
           ))}
         </select>
-        <button type="button" onClick={hear} disabled={!props.canPlay || !chosen} className="shrink-0 cursor-pointer rounded-md border border-line-strong px-3 text-sm text-ink hover:bg-raised disabled:cursor-default disabled:opacity-40">
+        <button type="button" onClick={hear} disabled={!props.canPlay || !chosen} className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-line-strong px-3 text-sm text-ink hover:bg-raised disabled:cursor-default disabled:opacity-40">
+          <Play size={13} aria-hidden />
           Hear it
         </button>
       </div>
@@ -289,7 +297,10 @@ function Key(props: { name: string; variable: string; set: boolean }) {
       <span className="text-ink">
         {props.name} <span className="font-mono text-xs text-ink-faint">{props.variable}</span>
       </span>
-      <span className={props.set ? "text-xs text-ink-muted" : "text-xs text-warning"}>{props.set ? "✓ set" : "not set"}</span>
+      <span className={`flex items-center gap-1 text-xs ${props.set ? "text-ink-muted" : "text-warning"}`}>
+        {props.set && <Check size={13} aria-hidden />}
+        {props.set ? "set" : "not set"}
+      </span>
     </li>
   );
 }
