@@ -34,7 +34,7 @@ MAX_AXIS = 60  # x values offered as zoom ends; longer axes go to the planner
 class Shortcut:
     """A request that needs no planning."""
 
-    op: Literal["set_view", "show_chart", "navigate"]
+    op: Literal["set_view", "show_chart", "navigate", "discuss"]
     chart_ids: tuple[str, ...]
     """The charts meant, in the order they were created. One or more for
     show_chart; one otherwise."""
@@ -219,8 +219,14 @@ def _questions(workspace: Workspace) -> dict:
                     " different kind of chart or as a table."
                 ),
                 "show": (
-                    "Asks only to see one or more existing charts again,"
-                    " unchanged, alone or side by side."
+                    "Asks only to put one or more existing charts on screen"
+                    " again, unchanged, alone or side by side."
+                ),
+                "ask": (
+                    "Asks a question about what an existing chart shows, to be"
+                    " answered in words from that chart as it is: what it"
+                    " reveals or means, what stands out, a summary, which is"
+                    " highest or lowest, how something changed."
                 ),
                 "none": (
                     "Not a request about this dataset or its charts: small talk,"
@@ -240,7 +246,7 @@ def _questions(workspace: Workspace) -> dict:
     }
 
 
-_SHORTCUTS = ("redraw", "show", "navigate")
+_SHORTCUTS = ("redraw", "show", "navigate", "ask")
 
 
 def _decide(answers: dict, workspace: Workspace, focus: str) -> Shortcut | None:
@@ -255,6 +261,9 @@ def _decide(answers: dict, workspace: Workspace, focus: str) -> Shortcut | None:
         if len(charts) > 1:
             return None
         return Shortcut("navigate", charts or (focus,))
+    if route["choice"] == "ask":
+        # Likewise "what does this reveal" is about the chart on screen.
+        return Shortcut("discuss", charts or (focus,))
     if any(1 - CONFIDENT < yes < CONFIDENT for yes in meant.values()):
         return None  # unsure about a chart
     if not charts:

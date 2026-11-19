@@ -15,6 +15,7 @@ import os
 import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Literal, cast, get_args
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
@@ -33,7 +34,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from talkviz.charts import KIND_NAMES, check_spec, fit_lens, views, why_not
+from talkviz.charts import KIND_NAMES, Bar, Line, check_spec, fit_lens, views, why_not
 from talkviz.manifest import Manifest
 from talkviz.speech import numbers_in, unsupported_numbers
 from talkviz.sql import QueryRejected, QueryResult
@@ -65,7 +66,7 @@ DEFAULT_SPEECH_EFFORT: Effort | None = "none"
 MAX_ACTIONS = 4
 RETRIES = 2
 # Rows of each result shown to the model when it writes the reply.
-SPEECH_ROWS = 40
+SPEECH_ROWS = 200
 
 
 def openrouter(name: str | None = None, effort: str | None = None) -> Model:
@@ -439,7 +440,20 @@ def _validate_speech(ctx: RunContext[SpeechDeps], output: str) -> str:
     if unsupported:
         ctx.deps.rejected.append(Rejected(output.strip(), unsupported))
         raise ModelRetry(_unsupported(unsupported))
+    if _SECOND_THOUGHTS.search(output):
+        raise ModelRetry(
+            "The reply corrects itself partway. Write it again, giving only the"
+            " final answer."
+        )
     return output
+
+
+# A reply that changes its mind aloud: "Ford led, wait, that's wrong, Kia did".
+_SECOND_THOUGHTS = re.compile(
+    r"\bwait\b[,.:]|\bthat(?:'s| is| was) (?:wrong|not right|incorrect)\b"
+    r"|\blet me correct\b|\bcorrection:",
+    re.IGNORECASE,
+)
 
 
 def _unsupported(numbers: list[str]) -> str:
@@ -575,6 +589,12 @@ only to show the same result another way.
   `reset` everything. The data is unchanged. Use this for "zoom in on 2020
   to 2024", "hide Ford", "zoom out", "show everything again". Use
   update_chart when they want the data itself narrowed ("only since 2020").
+- discuss when they ask a question that an existing chart's result already
+  answers, and want it answered in words: "what does this reveal", "what
+  stands out", "which make is highest in 2020", "summarise that". Give one
+  for each chart the question is about. Nothing changes; the reply is
+  written from those charts' rows. If answering needs data no chart has,
+  make a chart instead.
 - show_chart when they ask to see an existing chart again. To show several
   charts side by side, give one show_chart for each; the charts of a turn
   are shown together.
@@ -587,8 +607,8 @@ only to show the same result another way.
 def _speech_instructions(manifest: Manifest) -> str:
     return f"""\
 You are the voice of a data exploration tool for: {manifest.title}. The user
-asked something aloud and charts were made in response. Write what to say
-back. It will be read out by a text-to-speech voice, and the user can see the
+asked something aloud, and charts were made or looked up in response. Write
+what to say back. It will be read out by a text-to-speech voice, and the user can see the
 charts.
 
 - One to three short sentences of plain spoken English. No lists, symbols,
@@ -596,12 +616,23 @@ charts.
 - Lead with the answer, then the most notable thing in the data.
 - Use only numbers that appear in the results below, written in digits. You
   may round them ("about 12,400"). Do not calculate new figures.
-- Mention a caveat only when it changes how this answer should be read:
+- Mention a caveat only when it changes how this answer should be read, and
+  never one already said earlier in the conversation:
 {_bullets(manifest.caveats)}
 - If no chart was made, give the reason itself in one sentence, without
   saying that no chart was made, then make the offer or ask the question
   you were given.
 - If you name a chart by number, use the number given here, like "chart 1a".
+- Never correct yourself in the reply. For which was highest or lowest at
+  some point, read the "highest" and "lowest" columns; do not work it out.
+- When the user is asking about a chart already on screen, answer their
+  question from its rows, in two to four sentences: the pattern, the
+  extremes, a comparison, a change over time, whatever answers it. Do not
+  describe the chart or say that it is shown. The data cannot show why
+  something happened; if they ask why, say what the data does show and
+  suggest one thing that could be charted next to look into it.
+- When the rows listed are only the first of many, speak about those and do
+  not say the data is incomplete.
 """
 
 
@@ -641,14 +672,12 @@ def _speech_prompt(question: str, planned: Planned, history: list[Exchange]) -> 
         parts.append(f"No chart was made. Reason: {planned.plan.note}")
     for run in planned.runs:
         result = run.result
-        header = " | ".join(c.name for c in result.columns)
-        rows = "\n".join(
-            " | ".join(str(value) for value in row) for row in result.rows[:SPEECH_ROWS]
-        )
+        header, lines = _table(run.chart, result)
+        rows = "\n".join(lines[:SPEECH_ROWS])
         shown = (
-            f"first {SPEECH_ROWS} of {len(result.rows)} rows"
-            if len(result.rows) > SPEECH_ROWS
-            else f"{len(result.rows)} rows"
+            f"first {SPEECH_ROWS} of {len(lines)} rows"
+            if len(lines) > SPEECH_ROWS
+            else f"{len(lines)} rows"
         )
         parts.append(
             f"Chart {run.chart.label}, {_DID[run.op]}: {run.chart.title!r}"
@@ -658,6 +687,44 @@ def _speech_prompt(question: str, planned: Planned, history: list[Exchange]) -> 
     return "\n\n".join(parts)
 
 
+def _table(chart: Chart, result: QueryResult) -> tuple[str, list[str]]:
+    """The result as a header and text rows for the reply model. A chart with
+    series is laid out as the chart is, one row for each x value and one
+    column for each series, which makes "which was highest in 2020" a matter
+    of reading one row."""
+    spec = chart.spec
+    names = [column.name for column in result.columns]
+    x, y, series = (getattr(spec, name, None) for name in ("x", "y", "series"))
+    if isinstance(spec, Bar | Line) and series in names and x in names and y in names:
+        at_x, at_y, at_s = names.index(x), names.index(y), names.index(series)
+        cells = {(row[at_x], row[at_s]): row[at_y] for row in result.rows}
+        if len(cells) == len(result.rows):  # one value for each x and series
+            xs = list(dict.fromkeys(row[at_x] for row in result.rows))
+            columns = list(dict.fromkeys(row[at_s] for row in result.rows))
+            header = f"{x} | " + " | ".join(f"{name} ({y})" for name in columns)
+            lines = []
+            for k in xs:
+                values = [cells.get((k, c), "") for c in columns]
+                line = " | ".join(str(v) for v in [k, *values])
+                lines.append(line + _extremes(columns, values))
+            return header + " | highest | lowest", lines
+    header = " | ".join(names)
+    return header, [" | ".join(str(value) for value in row) for row in result.rows]
+
+
+def _extremes(names: list, values: list) -> str:
+    """Which of a row's values is highest and lowest, worked out here so the
+    model reads the ranking instead of working it out mid-sentence."""
+    known = [
+        (value, str(name))
+        for name, value in zip(names, values, strict=True)
+        if isinstance(value, int | float | Decimal) and not isinstance(value, bool)
+    ]
+    if len(known) < 2:
+        return " | | "
+    return f" | {max(known)[1]} | {min(known)[1]}"
+
+
 _DID = {
     "create_chart": "created",
     "update_chart": "updated",
@@ -665,6 +732,7 @@ _DID = {
     "set_view": "redrawn",
     "set_lens": "zoomed or series hidden",
     "narrow_chart": "made as a sub-chart keeping some rows of another",
+    "discuss": "already on screen, which the user is asking about",
 }
 
 

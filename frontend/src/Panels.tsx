@@ -378,7 +378,7 @@ function unverified(event: FeedEvent): string {
   return `${why}, so it was left out. The chart and its numbers are unaffected.`;
 }
 
-const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing", set_view: "Redrawn", set_lens: "Adjusted", narrow_chart: "Filtered" };
+const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing", set_view: "Redrawn", set_lens: "Adjusted", narrow_chart: "Filtered", discuss: "About" };
 
 export function Feed(props: {
   events: FeedEvent[];
