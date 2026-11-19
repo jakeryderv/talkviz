@@ -4,8 +4,8 @@ Talk to your data and see it charted. Ask a question in plain language;
 talkviz writes a read-only SQL query, checks it, runs it, picks a chart, and
 answers in a sentence or two.
 
-> Early development. The query engine and command line work today. The web
-> interface and voice are not built yet.
+> Early development. The query engine, command line, and web app (typed
+> questions) work today. Voice is not built yet.
 
 ## How it stays grounded
 
@@ -31,6 +31,14 @@ cp .env.example .env    # then add your OpenRouter key
 
 `OPENROUTER_API_KEY` is required. `TALKVIZ_MODEL` picks the model (any
 OpenRouter model id); the default is `anthropic/claude-opus-5.5`.
+`TALKVIZ_EFFORT` sets how much the model reasons before answering (`none`,
+`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); unset, each model uses its
+own default. `--model` and `--effort` override both for one command.
+
+The reply can come from a different, faster model than the one that plans
+the charts, since every number it says is checked against the results:
+`TALKVIZ_SPEECH_MODEL` and `TALKVIZ_SPEECH_EFFORT` (or `--speech-model` and
+`--speech-effort` on `ask`). Unset, the planning model also replies.
 
 ## Use
 
@@ -41,6 +49,11 @@ uv run talkviz add path/to/data.duckdb path/to/manifest.yaml
 uv run talkviz ask "How many orders were there each month?"
 uv run talkviz ask          # no question: start a conversation
 ```
+
+`talkviz serve` opens the web app at http://127.0.0.1:8321: chats on the left,
+the chart in focus in the centre, the conversation below it, and the chat's
+charts on the right. Chats, charts, and every result are kept in a local
+SQLite file.
 
 In a conversation you can refer back to charts: "make that a bar chart",
 "only since 2020", "show the first one again".
@@ -75,9 +88,11 @@ words and state the traps in `caveats`; the reply will mention them.
 
 An eval file is a YAML list of questions with a query that answers each
 correctly. A model passes a question when its query returns the same data.
+Each plan is timed, and the score is followed by the median and 90th
+percentile plan time.
 
 ```sh
-uv run talkviz eval path/to/eval.yaml --model anthropic/claude-haiku-5.5
+uv run talkviz eval path/to/eval.yaml --model anthropic/claude-haiku-5.5 --effort low
 ```
 
 ## Development
@@ -87,6 +102,14 @@ uv sync
 uv run pre-commit install   # once per clone
 uv run pytest
 uv run ruff check . && uv run ruff format --check . && uv run ty check
+```
+
+The interface is a React app in `frontend/`, built into the Python package:
+
+```sh
+cd frontend && npm install
+npm run build   # into src/talkviz/web, served by `talkviz serve`
+npm run dev     # or: live reload, with `talkviz serve` running alongside
 ```
 
 The hooks run ruff, ty, and a lockfile check on commit, and the tests on

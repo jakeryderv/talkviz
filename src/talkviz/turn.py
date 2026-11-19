@@ -4,10 +4,9 @@ import time
 from dataclasses import dataclass
 
 import duckdb
-from pydantic_ai.models import Model
 
 from talkviz import llm
-from talkviz.llm import ChartRun, Exchange, Plan
+from talkviz.llm import ChartRun, Exchange, Model, Plan
 from talkviz.manifest import Manifest
 from talkviz.workspace import Workspace
 
@@ -32,12 +31,16 @@ def take_turn(
     con: duckdb.DuckDBPyConnection,
     workspace: Workspace,
     history: list[Exchange],
+    speaker: Model | None = None,
 ) -> Turn:
-    """Plan and run the charts, write the reply, and update workspace and history."""
+    """Plan and run the charts, write the reply, and update workspace and history.
+
+    `model` plans the charts; `speaker`, if given, writes the reply instead.
+    """
     started = time.perf_counter()
     planned = llm.plan(model, question, manifest, con, workspace, history)
     planned_at = time.perf_counter()
-    spoken = llm.speak(model, question, manifest, planned, history)
+    spoken = llm.speak(speaker or model, question, manifest, planned, history)
     done = time.perf_counter()
     for run in planned.runs:
         workspace.apply(run.chart)

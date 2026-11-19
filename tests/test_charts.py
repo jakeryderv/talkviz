@@ -81,4 +81,4 @@ def test_too_many_bars_or_series(con):
     )
     spread = run(con, "SELECT 1 AS x, i AS s, i AS y FROM range(20) t(i)")
     spec = Bar(kind="bar", x="x", y="y", series="s")
-    assert any("at most 12 series" in p for p in check_spec(spec, spread))
+    assert any("at most 8 series" in p for p in check_spec(spec, spread))

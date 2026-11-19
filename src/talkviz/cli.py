@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 
 from talkviz import llm
-from talkviz.evaluate import evaluate
+from talkviz.evaluate import evaluate, plan_seconds
 from talkviz.llm import Exchange
 from talkviz.sources import add_source, list_sources, load_source
 from talkviz.turn import Turn, take_turn
@@ -29,16 +29,30 @@ def main() -> None:
     ask = commands.add_parser("ask", help="ask one question, or chat if none is given")
     ask.add_argument("question", nargs="?")
     _common(ask)
+    ask.add_argument(
+        "--speech-model",
+        help="OpenRouter model for the reply (default: TALKVIZ_SPEECH_MODEL, else"
+        f" {llm.DEFAULT_SPEECH_MODEL or 'the planning model'})",
+    )
+    ask.add_argument(
+        "--speech-effort",
+        choices=llm.EFFORTS,
+        help="reasoning effort for the reply model (default: TALKVIZ_SPEECH_EFFORT)",
+    )
 
     evaluation = commands.add_parser("eval", help="score a model on an eval file")
     evaluation.add_argument("eval_file", type=Path)
     _common(evaluation)
 
+    serve = commands.add_parser("serve", help="run the web app")
+    serve.add_argument("--port", type=int, default=8321)
+    serve.add_argument("--host", default="127.0.0.1")
+
     args = parser.parse_args()
     load_dotenv(find_dotenv(usecwd=True))
     try:
         _run(args)
-    except (LookupError, FileNotFoundError, llm.ModelFailed) as error:
+    except (LookupError, FileNotFoundError, ValueError, llm.ModelFailed) as error:
         sys.exit(f"talkviz: {error}")
 
 
@@ -46,6 +60,11 @@ def _common(command: argparse.ArgumentParser) -> None:
     command.add_argument("--source", help="source name, if more than one is registered")
     command.add_argument(
         "--model", help=f"OpenRouter model (default {llm.DEFAULT_MODEL})"
+    )
+    command.add_argument(
+        "--effort",
+        choices=llm.EFFORTS,
+        help="reasoning effort (default: TALKVIZ_EFFORT, else the model's own)",
     )
 
 
@@ -55,29 +74,58 @@ def _run(args: argparse.Namespace) -> None:
         print(f"added {source.name} ({source.database})")
     elif args.command == "sources":
         print("\n".join(list_sources()) or "no sources; add one with `talkviz add`")
+    elif args.command == "serve":
+        import uvicorn  # slow import, only needed here
+
+        from talkviz.server import create_app
+
+        print(f"talkviz is running at http://{args.host}:{args.port}")
+        uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning")
     elif args.command == "ask":
         _ask(args)
     elif args.command == "eval":
-        source, model = load_source(args.source), llm.openrouter(args.model)
-        outcomes = evaluate(model, source, args.eval_file)
-        for outcome in outcomes:
-            print(f"{'pass' if outcome.correct else 'FAIL'}  {outcome.question}")
-            if not outcome.correct:
-                print(f"      {outcome.detail}")
-                if outcome.sql:
-                    print(f"      {' '.join(outcome.sql.split())}")
-        correct = sum(outcome.correct for outcome in outcomes)
-        print(f"\n{correct}/{len(outcomes)} correct ({model.model_name})")
+        _eval(args)
+
+
+def _eval(args: argparse.Namespace) -> None:
+    source = load_source(args.source)
+    model = llm.openrouter(args.model, args.effort)
+    outcomes = evaluate(model, source, args.eval_file)
+    for outcome in outcomes:
+        retried = f" ({outcome.calls} calls)" if (outcome.calls or 1) > 1 else ""
+        print(
+            f"{'pass' if outcome.correct else 'FAIL'}  {outcome.seconds:5.1f}s"
+            f"  {outcome.question}{retried}"
+        )
+        if not outcome.correct:
+            print(f"      {outcome.detail}")
+            if outcome.sql:
+                print(f"      {' '.join(outcome.sql.split())}")
+    correct = sum(outcome.correct for outcome in outcomes)
+    median, p90 = plan_seconds(outcomes)
+    print(
+        f"\n{correct}/{len(outcomes)} correct ({_describe(model)});"
+        f" plan median {median:.1f}s, p90 {p90:.1f}s"
+    )
+
+
+def _describe(model: llm.Model) -> str:
+    effort = (model.settings or {}).get("openrouter_reasoning", {}).get("effort")
+    return f"{model.model_name}, effort {effort}" if effort else model.model_name
 
 
 def _ask(args: argparse.Namespace) -> None:
-    source, model = load_source(args.source), llm.openrouter(args.model)
+    source = load_source(args.source)
+    model = llm.openrouter(args.model, args.effort)
+    speaker = llm.speech_openrouter(args.speech_model, args.speech_effort)
     workspace, history = Workspace(), list[Exchange]()
     with source.connect() as con:
         print(f"{source.manifest.title}, data as of {source.data_version(con)}")
         questions = [args.question] if args.question else iter(_prompt, None)
         for question in questions:
-            turn = take_turn(model, question, source.manifest, con, workspace, history)
+            turn = take_turn(
+                model, question, source.manifest, con, workspace, history, speaker
+            )
             _show(turn)
 
 

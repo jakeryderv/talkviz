@@ -11,12 +11,14 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "duckdb>=2.0.0",
+    "fastapi>=0.165.0",
     "platformdirs>=4.14.7",
     "pydantic>=2.14.3",
     "pydantic-ai-slim[openrouter]>=2.71.0",
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0.3",
     "sqlglot>=30.33.0",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]
@@ -28,6 +30,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pre-commit>=4.7.0",
     "pytest>=9.2.0",
     "ruff>=0.17.5",
