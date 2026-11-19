@@ -42,12 +42,14 @@ from talkviz.workspace import Action, Chart, CreateChart, Workspace
 Effort = Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
 EFFORTS: tuple[str, ...] = get_args(Effort)
 
-DEFAULT_MODEL = "anthropic/claude-opus-5.5"
+# Chosen for speed at equal accuracy on the eval: about 1.3 s to plan and 1 s
+# to reply, against about 10 s a turn with one larger model doing both.
+DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"
 # None leaves reasoning at the model's own default.
-DEFAULT_EFFORT: Effort | None = None
+DEFAULT_EFFORT: Effort | None = "low"
 # The model that writes the reply; None means the planning model does.
-DEFAULT_SPEECH_MODEL: str | None = None
-DEFAULT_SPEECH_EFFORT: Effort | None = None
+DEFAULT_SPEECH_MODEL: str | None = "anthropic/claude-haiku-5.5"
+DEFAULT_SPEECH_EFFORT: Effort | None = "none"
 MAX_ACTIONS = 3
 RETRIES = 2
 # Rows of each result shown to the model when it writes the reply.
@@ -61,10 +63,13 @@ def openrouter(name: str | None = None, effort: str | None = None) -> Model:
     else TALKVIZ_EFFORT, else DEFAULT_EFFORT. Needs OPENROUTER_API_KEY in the
     environment.
     """
-    return _openrouter(
-        name or os.environ.get("TALKVIZ_MODEL") or DEFAULT_MODEL,
-        effort or os.environ.get("TALKVIZ_EFFORT") or DEFAULT_EFFORT,
-    )
+    chosen = name or os.environ.get("TALKVIZ_MODEL")
+    effort = effort or os.environ.get("TALKVIZ_EFFORT")
+    if not chosen:
+        # The default effort was tuned for the default model, so it applies
+        # only to that; another model keeps its own default.
+        return _openrouter(DEFAULT_MODEL, effort or DEFAULT_EFFORT)
+    return _openrouter(chosen, effort)
 
 
 def speech_openrouter(
@@ -75,11 +80,13 @@ def speech_openrouter(
     Like openrouter(), with TALKVIZ_SPEECH_MODEL, TALKVIZ_SPEECH_EFFORT,
     DEFAULT_SPEECH_MODEL and DEFAULT_SPEECH_EFFORT.
     """
-    name = name or os.environ.get("TALKVIZ_SPEECH_MODEL") or DEFAULT_SPEECH_MODEL
-    if not name:
+    chosen = name or os.environ.get("TALKVIZ_SPEECH_MODEL")
+    effort = effort or os.environ.get("TALKVIZ_SPEECH_EFFORT")
+    if chosen:
+        return _openrouter(chosen, effort)
+    if not DEFAULT_SPEECH_MODEL:
         return None
-    effort = effort or os.environ.get("TALKVIZ_SPEECH_EFFORT") or DEFAULT_SPEECH_EFFORT
-    return _openrouter(name, effort)
+    return _openrouter(DEFAULT_SPEECH_MODEL, effort or DEFAULT_SPEECH_EFFORT)
 
 
 def _openrouter(name: str, effort: str | None) -> Model:

@@ -55,6 +55,27 @@ def test_openrouter_sets_reasoning_effort(monkeypatch):
         llm.openrouter("some/model", "lots")
 
 
+def test_default_models_come_with_their_tuned_effort(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
+    for name in (
+        "TALKVIZ_MODEL",
+        "TALKVIZ_EFFORT",
+        "TALKVIZ_SPEECH_MODEL",
+        "TALKVIZ_SPEECH_EFFORT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    planner, speaker = llm.openrouter(), llm.speech_openrouter()
+    assert planner.model_name == llm.DEFAULT_MODEL
+    assert planner.settings == {"openrouter_reasoning": {"effort": llm.DEFAULT_EFFORT}}
+    assert speaker is not None and speaker.model_name == llm.DEFAULT_SPEECH_MODEL
+    assert speaker.settings == {
+        "openrouter_reasoning": {"effort": llm.DEFAULT_SPEECH_EFFORT}
+    }
+    # A model the user picks keeps its own default effort.
+    monkeypatch.setenv("TALKVIZ_MODEL", "other/model")
+    assert not (llm.openrouter().settings or {})
+
+
 def test_speech_openrouter_is_none_unless_a_speech_model_is_set(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     monkeypatch.setattr(llm, "DEFAULT_SPEECH_MODEL", None)

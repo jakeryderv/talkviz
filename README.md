@@ -29,16 +29,21 @@ uv sync
 cp .env.example .env    # then add your OpenRouter key
 ```
 
-`OPENROUTER_API_KEY` is required. `TALKVIZ_MODEL` picks the model (any
-OpenRouter model id); the default is `anthropic/claude-opus-5.5`.
-`TALKVIZ_EFFORT` sets how much the model reasons before answering (`none`,
-`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); unset, each model uses its
-own default. `--model` and `--effort` override both for one command.
+`OPENROUTER_API_KEY` is required. Two models share the work: one plans the
+charts and a smaller, faster one writes the reply, since every number it says
+is checked against the results anyway. By default these are
+`anthropic/claude-sonnet-5.5` at low reasoning effort and
+`anthropic/claude-haiku-5.5` with reasoning off, which together answer in
+about 2 to 3 seconds.
 
-The reply can come from a different, faster model than the one that plans
-the charts, since every number it says is checked against the results:
-`TALKVIZ_SPEECH_MODEL` and `TALKVIZ_SPEECH_EFFORT` (or `--speech-model` and
-`--speech-effort` on `ask`). Unset, the planning model also replies.
+| Setting | Flag | What it sets |
+|---|---|---|
+| `TALKVIZ_MODEL` | `--model` | Planning model: any OpenRouter model id |
+| `TALKVIZ_EFFORT` | `--effort` | Its reasoning effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `TALKVIZ_SPEECH_MODEL` | `--speech-model` | Reply model |
+| `TALKVIZ_SPEECH_EFFORT` | `--speech-effort` | Its reasoning effort |
+
+A model you choose runs at its own default effort unless you set one.
 
 ## Use
 
