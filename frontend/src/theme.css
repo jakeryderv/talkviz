@@ -14,7 +14,8 @@
   --color-ink-strong: #fafafa;
   --color-ink: #d4d4d8;
   --color-ink-muted: #a1a1aa;
-  --color-ink-faint: #71717a;
+  /* The quietest text: 5:1 on the surface colour, so small print stays readable. */
+  --color-ink-faint: #8b8b94;
 
   --color-primary: #3b82f6;
   --color-primary-bright: #60a5fa;
@@ -56,6 +57,101 @@ body {
 @layer base {
   :focus-visible { outline: 2px solid var(--color-primary-bright); outline-offset: 2px; }
 }
+
+/* Form controls, drawn to match the rest of the interface rather than the browser. */
+@layer base {
+  select {
+    appearance: none;
+    padding-right: 1.9rem !important;
+    cursor: pointer;
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 0.8rem;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
+  /* Checkboxes are drawn as switches. */
+  input[type="checkbox"] {
+    appearance: none;
+    position: relative;
+    flex-shrink: 0;
+    width: 1.75rem;
+    height: 1rem;
+    border-radius: 999px;
+    background: var(--color-line-strong);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  input[type="checkbox"]::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: calc(1rem - 4px);
+    height: calc(1rem - 4px);
+    border-radius: 999px;
+    background: var(--color-ink-strong);
+    transition: transform 0.15s;
+  }
+  input[type="checkbox"]:checked { background: var(--color-primary); }
+  input[type="checkbox"]:checked::after { transform: translateX(0.75rem); }
+  input[type="range"] {
+    appearance: none;
+    height: 1rem;
+    background: transparent;
+    cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: var(--color-line-strong); }
+  input[type="range"]::-moz-range-track { height: 4px; border-radius: 999px; background: var(--color-line-strong); }
+  input[type="range"]::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--color-primary); }
+  input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    border-radius: 999px;
+    background: var(--color-ink-strong);
+    border: 2px solid var(--color-primary);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--color-ink-strong);
+    border: 2px solid var(--color-primary);
+  }
+}
+
+/* A short label shown beside a control on hover or keyboard focus: data-tip="…".
+   data-tip-at places it: "below" (default), "above", and "left"/"right" pin it
+   to that edge of the control, for controls at the edge of the window. */
+[data-tip] { position: relative; }
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-raised);
+  color: var(--color-ink-strong);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s 0.35s;
+}
+[data-tip]:hover::after, [data-tip]:focus-visible::after { opacity: 1; }
+[data-tip][data-tip-at~="above"]::after { top: auto; bottom: calc(100% + 6px); }
+[data-tip][data-tip-at~="left"]::after { left: 0; transform: none; }
+[data-tip][data-tip-at~="right"]::after { left: auto; right: 0; transform: none; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
