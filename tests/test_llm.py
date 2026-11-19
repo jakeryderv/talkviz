@@ -257,7 +257,6 @@ def test_turns_build_up_a_workspace_and_edit_charts_in_place(manifest, con):
                 {"op": "update_chart", "chart_id": "c1", "spec": {"kind": "table"}}
             ]
         },
-        "Here it is as a table.",
         {
             "actions": [
                 create(
@@ -283,15 +282,17 @@ def test_turns_build_up_a_workspace_and_edit_charts_in_place(manifest, con):
         "rename the first, show orders",
     ):
         turn = take_turn(model, question, manifest, con, workspace, history)
+    # Drawing c1 as a table was a view, not a revision; renaming it was one.
     assert [(c.id, c.title, c.spec.kind, c.revision) for c in workspace.charts] == [
-        ("c1", "Category sales", "table", 3),
+        ("c1", "Category sales", "bar", 2),
         ("c2", "Orders", "stat", 1),
     ]
+    assert history[1].reply == "Here's Sales by category as a table."
     assert workspace.charts[0].sql == TOTALS  # untouched fields are kept
     assert [e.reply for e in history][-1] == "Renamed, and here are the 6 orders again."
     assert [run.op for run in turn.runs] == ["update_chart", "show_chart"]
     # Later turns are told about the charts and the conversation so far.
-    prompt = model.sent(6)
+    prompt = model.sent(5)
     assert "c1: 'Sales by category'" in prompt and "User: how many orders?" in prompt
 
 
@@ -321,3 +322,37 @@ def test_duplicate_titles_are_sent_back(manifest, con):
     model = scripted({"actions": [create(), create()]}, {"actions": [create()]})
     llm.plan(model, "twice", manifest, con, Workspace(), [])
     assert "already titled 'Sales by category'" in model.sent(1)
+
+
+def test_set_view_redraws_without_a_reply_call_and_a_new_definition_resets_it(
+    manifest, con
+):
+    workspace, history = Workspace(), list[Exchange]()
+    model = scripted(
+        {"actions": [create()]},
+        "Games lead at 105.",
+        {"actions": [{"op": "set_view", "chart_id": "c1", "kind": "donut"}]},
+        {"actions": [{"op": "update_chart", "chart_id": "c1", "title": "By category"}]},
+        "Renamed.",
+    )
+    take_turn(model, "sales by category?", manifest, con, workspace, history)
+    turn = take_turn(model, "make that a donut", manifest, con, workspace, history)
+    assert [run.op for run in turn.runs] == ["set_view"]
+    assert turn.reply == "Here's Sales by category as a donut chart."
+    assert (workspace.charts[0].view, workspace.charts[0].revision) == ("donut", 1)
+    take_turn(model, "rename it", manifest, con, workspace, history)
+    assert (workspace.charts[0].view, workspace.charts[0].revision) == (None, 2)
+
+
+def test_set_view_to_a_kind_the_result_does_not_fit_is_sent_back(manifest, con):
+    workspace, history = Workspace(), list[Exchange]()
+    model = scripted(
+        {"actions": [create()]},
+        "Games lead at 105.",
+        {"actions": [{"op": "set_view", "chart_id": "c1", "kind": "scatter3d"}]},
+        {"actions": [{"op": "set_view", "chart_id": "c1", "kind": "table"}]},
+    )
+    take_turn(model, "sales by category?", manifest, con, workspace, history)
+    take_turn(model, "show it in 3D", manifest, con, workspace, history)
+    assert "cannot be drawn as 'scatter3d'" in model.sent(3)
+    assert workspace.charts[0].view == "table"

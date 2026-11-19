@@ -33,11 +33,18 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from talkviz.charts import MAX_SLICES, check_spec
+from talkviz.charts import KIND_NAMES, MAX_SLICES, check_spec, views
 from talkviz.manifest import Manifest
 from talkviz.speech import numbers_in, unsupported_numbers
 from talkviz.sql import QueryRejected, QueryResult, check_and_run
-from talkviz.workspace import Action, Chart, CreateChart, Workspace
+from talkviz.workspace import (
+    Action,
+    Chart,
+    CreateChart,
+    SetView,
+    UpdateChart,
+    Workspace,
+)
 
 Effort = Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
 EFFORTS: tuple[str, ...] = get_args(Effort)
@@ -285,7 +292,25 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
             problems.append(f"{where}: query rejected: {rejected}")
             continue
         problems.extend(f"{where}: {p}" for p in check_spec(chart.spec, result))
-        runs.append(ChartRun(chart, result, action.op))
+        op = action.op
+        current = deps.workspace.get(chart.id)
+        if isinstance(action, SetView):
+            fits = [view.kind for view in views(chart.spec, result)]
+            if action.kind not in fits:
+                problems.append(
+                    f"{where}: {chart.title!r} cannot be drawn as {action.kind!r}."
+                    f" Its result fits: {', '.join(fits)}. For anything else, use"
+                    " update_chart with a query that returns what the kind needs."
+                )
+        elif (
+            isinstance(action, UpdateChart)
+            and current is not None
+            and (chart.sql, chart.title) == (current.sql, current.title)
+            and chart.spec in views(current.spec, result)
+        ):
+            # Only how the same result is drawn changed: a view, not a revision.
+            chart, op = current.model_copy(update={"view": chart.spec.kind}), "set_view"
+        runs.append(ChartRun(chart, result, op))
     if problems:
         raise ModelRetry("Fix these problems and answer again:\n" + "\n".join(problems))
     deps.runs = runs
@@ -406,8 +431,11 @@ only to show the same result another way.
 # Actions
 
 - create_chart for a new question.
-- update_chart when they ask to change a chart they already have ("make that
-  a bar chart", "only since 2015"). Send only the fields that change.
+- update_chart when they ask to change what a chart they already have shows
+  ("only since 2015", "split it by make"). Send only the fields that change.
+- set_view when they only want an existing chart drawn another way ("make
+  that a donut", "show it as a table"). It reuses the chart's result, so it
+  works only for kinds that result fits; you are told if it does not.
 - show_chart when they ask to see an existing chart again.
 - Titles are how the user refers to charts aloud: short, specific, distinct.
 - If the question cannot be answered from this dataset, or is too vague to
@@ -441,7 +469,8 @@ def _plan_prompt(question: str, workspace: Workspace, history: list[Exchange]) -
     if workspace.charts:
         charts = "\n".join(
             f"- {c.id}: {c.title!r} spec={c.spec.model_dump_json(exclude_none=True)}"
-            f"\n  sql: {' '.join(c.sql.split())}"
+            + (f" drawn as {c.view}" if c.view else "")
+            + f"\n  sql: {' '.join(c.sql.split())}"
             for c in workspace.charts
         )
         parts.append("Charts in this chat (the last is the most recent):\n" + charts)
@@ -468,10 +497,29 @@ def _speech_prompt(question: str, planned: Planned, history: list[Exchange]) -> 
             else f"{len(result.rows)} rows"
         )
         parts.append(
-            f"Chart {run.op.removesuffix('_chart')}d: {run.chart.title!r}"
-            f" ({run.chart.spec.kind}, {shown})\n{header}\n{rows}"
+            f"Chart {_DID[run.op]}: {run.chart.title!r}"
+            f" ({run.chart.shown}, {shown})\n{header}\n{rows}"
         )
     return "\n\n".join(parts)
+
+
+_DID = {
+    "create_chart": "created",
+    "update_chart": "updated",
+    "show_chart": "shown",
+    "set_view": "redrawn",
+}
+
+
+def view_reply(runs: list[ChartRun]) -> str | None:
+    """A reply for a turn that only changed how charts are drawn, which needs
+    no model: there is nothing new to say about the data. None otherwise."""
+    if not runs or any(run.op != "set_view" for run in runs):
+        return None
+    return " ".join(
+        f"Here's {run.chart.title} as {KIND_NAMES.get(run.chart.shown, run.chart.shown)}."
+        for run in runs
+    )
 
 
 def _transcript(history: list[Exchange]) -> str:

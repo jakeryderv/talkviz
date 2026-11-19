@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Chart, type Chat, type ChatView, type Source } from "./api";
+import { api, type Chart, type Chat, type ChatView, type Kind, type Source } from "./api";
 import { ChartList, Feed, Sidebar, Workspace } from "./Panels";
 
 export function App() {
@@ -36,10 +36,7 @@ export function App() {
   }, [open]);
   useEffect(() => {
     const hash = view ? `#${view.chat.id}${focus ? `/${focus}` : ""}` : "";
-    // Leave a chosen view (#chat/chart/view) alone while the chart is unchanged.
-    if (!hash || !location.hash.startsWith(`${hash}/`)) {
-      if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname);
-    }
+    if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname);
   }, [view?.chat.id, focus]);
 
   const startNew = () => {
@@ -84,6 +81,17 @@ export function App() {
     api.rerun(view.chat.id, chartId).then(replace).catch(fail);
   };
 
+  // Drawing a chart another way is saved with the chart, but changes nothing
+  // else: no query, no revision, nothing in the feed.
+  const draw = (chartId: string, kind: Kind) => {
+    if (!view) return;
+    setView((v) => v && {
+      ...v,
+      charts: v.charts.map((c) => (c.id === chartId ? { ...c, view: kind === c.spec.kind ? null : kind } : c)),
+    });
+    api.setView(view.chat.id, chartId, kind).catch(fail);
+  };
+
   const remove = (id: string) => {
     api
       .deleteChat(id)
@@ -101,7 +109,7 @@ export function App() {
     <div className="grid h-full grid-cols-[240px_minmax(0,1fr)_260px]">
       <Sidebar chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} />
       <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_minmax(180px,32%)]">
-        <Workspace chart={chart} source={source} busy={pending !== null} onAsk={say} />
+        <Workspace chart={chart} source={source} busy={pending !== null} onAsk={say} onDraw={draw} />
         <Feed events={view?.events ?? []} pending={pending} error={error} onSay={say} onFocus={setFocus} />
       </main>
       <ChartList charts={view?.charts ?? []} focus={focus} onFocus={show} />

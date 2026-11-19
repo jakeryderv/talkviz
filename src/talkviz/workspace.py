@@ -1,7 +1,8 @@
 """A chat's charts, and the actions the agent can take on them.
 
 A chart is a saved definition (title, SQL, spec), not data: showing it runs
-its query against the current database. Editing a chart adds a revision.
+its query against the current database. Changing the definition adds a
+revision. Choosing another way to draw the same result (its view) does not.
 """
 
 from typing import Annotated, Literal
@@ -17,6 +18,13 @@ class Chart(BaseModel):
     sql: str
     spec: ChartSpec
     revision: int = 1
+    view: str | None = None
+    """The kind the chart is drawn as, if not its spec's: one of the kinds
+    charts.views() gives for its result. Not part of the definition."""
+
+    @property
+    def shown(self) -> str:
+        return self.view or self.spec.kind
 
 
 class _Action(BaseModel):
@@ -42,6 +50,14 @@ class UpdateChart(_Action):
     spec: ChartSpec | None = None
 
 
+class SetView(_Action):
+    """Draw an existing chart's result another way, without changing the chart."""
+
+    op: Literal["set_view"]
+    chart_id: str
+    kind: str = Field(description="Chart kind to draw it as, e.g. donut or table.")
+
+
 class ShowChart(_Action):
     """Bring an existing chart back into focus, re-run on current data."""
 
@@ -49,7 +65,8 @@ class ShowChart(_Action):
     chart_id: str
 
 
-Action = Annotated[CreateChart | UpdateChart | ShowChart, Field(discriminator="op")]
+AnyAction = CreateChart | UpdateChart | SetView | ShowChart
+Action = Annotated[AnyAction, Field(discriminator="op")]
 
 
 class Workspace(BaseModel):
@@ -60,7 +77,7 @@ class Workspace(BaseModel):
     def get(self, chart_id: str) -> Chart | None:
         return next((c for c in self.charts if c.id == chart_id), None)
 
-    def resolve(self, action: CreateChart | UpdateChart | ShowChart) -> Chart:
+    def resolve(self, action: AnyAction) -> Chart:
         """The chart as it would be after the action. Raises KeyError for an
         unknown chart_id."""
         if isinstance(action, CreateChart):
@@ -75,12 +92,14 @@ class Workspace(BaseModel):
             raise KeyError(action.chart_id)
         if isinstance(action, ShowChart):
             return current
+        if isinstance(action, SetView):
+            return current.model_copy(update={"view": action.kind})
         changes = action.model_dump(exclude={"op", "chart_id"}, exclude_none=True)
         if not changes:
             return current
-        return Chart.model_validate(
-            {**current.model_dump(), **changes, "revision": current.revision + 1}
-        )
+        # A new definition starts again in the view its spec names.
+        revised = {**changes, "revision": current.revision + 1, "view": None}
+        return Chart.model_validate({**current.model_dump(), **revised})
 
     def apply(self, chart: Chart) -> None:
         """Store a chart from resolve(), replacing the one with the same id."""

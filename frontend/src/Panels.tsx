@@ -128,25 +128,13 @@ export function Workspace(props: {
   source: Source | undefined;
   busy: boolean;
   onAsk: (text: string) => void;
+  onDraw: (chartId: string, kind: Kind) => void;
 }) {
   const { chart, source } = props;
-  // The chosen view is kept in the address (#chat/chart/view) so it survives a reload.
-  const [kind, setKind] = useState<Kind | null>(() => (location.hash.split("/")[2] as Kind) ?? null);
   const [details, setDetails] = useState(false);
   const [saving, setSaving] = useState(false);
-  const shown = useRef(`${chart?.id}/${chart?.revision}`);
-  // A different chart, or a new revision of this one, opens in the view the agent chose.
-  useEffect(() => {
-    const now = `${chart?.id}/${chart?.revision}`;
-    if (chart && shown.current !== "undefined/undefined" && shown.current !== now) setKind(null);
-    shown.current = now;
-    setSaving(false);
-  }, [chart?.id, chart?.revision]);
-  const choose = (view: Kind) => {
-    setKind(view);
-    const [chat, id] = location.hash.split("/");
-    if (chat && id) history.replaceState(null, "", `${chat}/${id}/${view}`);
-  };
+  useEffect(() => setSaving(false), [chart?.id]);
+  const kind = chart ? (chart.view ?? chart.spec.kind) : null;
 
   const run = chart?.run ?? null;
   const spec = chart ? (chart.views.find((view) => view.kind === kind) ?? chart.spec) : null;
@@ -222,7 +210,7 @@ export function Workspace(props: {
                 key={view.kind}
                 type="button"
                 aria-pressed={spec.kind === view.kind}
-                onClick={() => choose(view.kind)}
+                onClick={() => props.onDraw(chart.id, view.kind)}
                 className={`cursor-pointer rounded px-2.5 py-1 ${spec.kind === view.kind ? "bg-raised text-ink-strong" : "text-ink-muted hover:text-ink"}`}
               >
                 {KINDS[view.kind]}
@@ -296,7 +284,7 @@ export function Workspace(props: {
   );
 }
 
-const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing" };
+const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing", set_view: "Redrawn" };
 
 export function Feed(props: {
   events: FeedEvent[];
@@ -405,7 +393,7 @@ export function ChartList(props: { charts: Chart[]; focus: string | null; onFocu
             <span className="w-4 shrink-0 text-xs leading-5 text-ink-faint tabular-nums">{i + 1}</span>
             <span className="min-w-0">
               <span className="block text-sm leading-5">{chart.title}</span>
-              <span className="block text-xs text-ink-faint">{KINDS[chart.spec.kind]}</span>
+              <span className="block text-xs text-ink-faint">{KINDS[chart.view ?? chart.spec.kind]}</span>
             </span>
           </button>
         ))}

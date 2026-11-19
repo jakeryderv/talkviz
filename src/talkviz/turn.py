@@ -40,7 +40,11 @@ def take_turn(
     started = time.perf_counter()
     planned = llm.plan(model, question, manifest, con, workspace, history)
     planned_at = time.perf_counter()
-    spoken = llm.speak(speaker or model, question, manifest, planned, history)
+    fixed = llm.view_reply(planned.runs)
+    if fixed is not None:
+        spoken = llm.Spoken(fixed, verified=True, messages=b"[]")
+    else:
+        spoken = llm.speak(speaker or model, question, manifest, planned, history)
     done = time.perf_counter()
     for run in planned.runs:
         workspace.apply(run.chart)

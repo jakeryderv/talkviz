@@ -57,6 +57,10 @@ class Rename(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
 
+class View(BaseModel):
+    kind: str
+
+
 class Say(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
@@ -183,6 +187,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     revision=run.chart.revision,
                     title=run.chart.title,
                     run_id=saved.id,
+                    view=run.chart.view if run.op == "set_view" else None,
                 )
             )
         events.append(
@@ -213,6 +218,21 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
             raise HTTPException(409, f"This chart no longer runs: {error}") from error
         run = store.save_run(chat.id, chart, result, version)
         return _view(chart, run)
+
+    @app.put("/api/chats/{chat_id}/charts/{chart_id}/view")
+    def set_view(chart_id: str, body: View, chat: Current, store: Stored) -> ChartView:
+        """Draw a chart's latest result another way. No query, revision, or
+        feed entry: the chart itself is unchanged."""
+        chart = next((c for c in store.charts(chat.id) if c.id == chart_id), None)
+        if chart is None:
+            raise HTTPException(404, "No such chart.")
+        shown = _view(chart, store.latest_runs(chat.id).get(chart_id))
+        if body.kind not in [view.kind for view in shown.views]:
+            raise HTTPException(400, f"This chart cannot be drawn as {body.kind!r}.")
+        # The spec's own kind is the default, stored as no view.
+        view = None if body.kind == chart.spec.kind else body.kind
+        store.set_view(chat.id, chart_id, view)
+        return shown.model_copy(update={"view": view})
 
     if WEB.is_dir():
         app.mount("/", StaticFiles(directory=WEB, html=True), name="web")

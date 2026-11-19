@@ -38,6 +38,8 @@ export type Chart = {
   sql: string;
   spec: Spec;
   revision: number;
+  /** The kind it is drawn as, when not the spec's own. Saved with the chart. */
+  view: Kind | null;
   run: Run | null;
   /** Every way the result can be drawn, the chart's own spec first. */
   views: Spec[];
@@ -97,6 +99,12 @@ export const api = {
   newChat: (source?: string) => request<Chat>("/api/chats", post({ source })),
   deleteChat: (id: string) => request<void>(`/api/chats/${id}`, { method: "DELETE" }),
   say: (id: string, text: string) => request<TurnView>(`/api/chats/${id}/turns`, post({ text })),
+  setView: (id: string, chartId: string, kind: Kind) =>
+    request<Chart>(`/api/chats/${id}/charts/${chartId}/view`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind }),
+    }),
   rerun: (id: string, chartId: string) =>
     request<Chart>(`/api/chats/${id}/charts/${chartId}/run`, post()),
 };

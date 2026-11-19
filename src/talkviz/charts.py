@@ -87,6 +87,21 @@ class Scatter(_Spec):
 
 
 Spec = Stat | Table | Bar | Line | Parts | Heatmap | Scatter
+
+# What to call each kind when speaking.
+KIND_NAMES = {
+    "stat": "a single number",
+    "table": "a table",
+    "bar": "a bar chart",
+    "stacked_bar": "a stacked bar chart",
+    "line": "a line chart",
+    "area": "an area chart",
+    "donut": "a donut chart",
+    "treemap": "a treemap",
+    "heatmap": "a heatmap",
+    "scatter": "a scatter plot",
+    "scatter3d": "a 3D scatter plot",
+}
 ChartSpec = Annotated[Spec, Field(discriminator="kind")]
 
 _DISCRETE = ("text", "number", "boolean", "time")

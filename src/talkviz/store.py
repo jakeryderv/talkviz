@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS chats (
 CREATE TABLE IF NOT EXISTS charts (
     chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     id TEXT NOT NULL, title TEXT NOT NULL, sql TEXT NOT NULL, spec TEXT NOT NULL,
-    revision INTEGER NOT NULL, position INTEGER NOT NULL,
+    revision INTEGER NOT NULL, position INTEGER NOT NULL, view TEXT,
     PRIMARY KEY (chat_id, id)
 );
 CREATE TABLE IF NOT EXISTS chart_revisions (
@@ -101,6 +101,8 @@ class Event(BaseModel):
     revision: int | None = None
     title: str | None = None
     run_id: int | None = None
+    view: str | None = None
+    """The kind a set_view event changed the chart to."""
 
 
 def default_path() -> Path:
@@ -115,6 +117,11 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
             db.executescript(_SCHEMA)
+            # Databases made before charts had a view.
+            if "view" not in {
+                row["name"] for row in db.execute("PRAGMA table_info(charts)")
+            }:
+                db.execute("ALTER TABLE charts ADD COLUMN view TEXT")
 
     # Chats
 
@@ -156,7 +163,8 @@ class Store:
         """The chat's charts as they are now, in the order they were created."""
         with self._db() as db:
             rows = db.execute(
-                "SELECT id, title, sql, spec, revision FROM charts WHERE chat_id = ?"
+                "SELECT id, title, sql, spec, revision, view FROM charts"
+                " WHERE chat_id = ?"
                 " ORDER BY position",
                 [chat_id],
             ).fetchall()
@@ -172,15 +180,24 @@ class Store:
         with self._db() as db:
             db.execute(
                 "INSERT INTO charts VALUES (?, ?, ?, ?, ?, ?,"
-                " (SELECT count(*) FROM charts WHERE chat_id = ?1))"
+                " (SELECT count(*) FROM charts WHERE chat_id = ?1), ?)"
                 " ON CONFLICT (chat_id, id) DO UPDATE SET title = excluded.title,"
-                " sql = excluded.sql, spec = excluded.spec, revision = excluded.revision",
-                values,
+                " sql = excluded.sql, spec = excluded.spec,"
+                " revision = excluded.revision, view = excluded.view",
+                [*values, chart.view],
             )
             db.execute(
                 "INSERT OR IGNORE INTO chart_revisions (chat_id, chart_id, title, sql,"
                 " spec, revision, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [*values, _now()],
+            )
+
+    def set_view(self, chat_id: str, chart_id: str, view: str | None) -> None:
+        """Record how a chart is drawn. Not a revision: the definition is unchanged."""
+        with self._db() as db:
+            db.execute(
+                "UPDATE charts SET view = ? WHERE chat_id = ? AND id = ?",
+                [view, chat_id, chart_id],
             )
 
     def save_run(

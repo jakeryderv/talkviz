@@ -74,20 +74,20 @@ def test_a_chat_is_restored_with_charts_results_and_feed(source):
                 {"op": "update_chart", "chart_id": "c1", "spec": {"kind": "table"}}
             ]
         },
-        "Here it is as a table.",
     )
     chat_id = app.post("/api/chats", json={}).json()["id"]
     for text in ("sales by category?", "how many orders?", "make the first a table"):
         app.post(f"/api/chats/{chat_id}/turns", json={"text": text})
     view = app.get(f"/api/chats/{chat_id}").json()
     assert [
-        (c["id"], c["title"], c["spec"]["kind"], c["revision"]) for c in view["charts"]
+        (c["id"], c["title"], c["spec"]["kind"], c["view"], c["revision"])
+        for c in view["charts"]
     ] == [
-        ("c1", "Sales by category", "table", 2),
-        ("c2", "Orders", "stat", 1),
+        ("c1", "Sales by category", "bar", "table", 1),
+        ("c2", "Orders", "stat", None, 1),
     ]
     assert view["charts"][1]["run"]["rows"] == [[6]]
-    assert view["charts"][0]["run"]["revision"] == 2
+    assert view["events"][-1]["text"] == "Here's Sales by category as a table."
     assert view["focus"] == "c1"
     assert [e["kind"] for e in view["events"]] == ["user", "chart", "assistant"] * 3
     assert [c["title"] for c in app.get("/api/chats").json()] == ["sales by category?"]
@@ -153,3 +153,32 @@ def test_bad_requests_are_explained(source):
     assert app.get("/api/chats/nope").status_code == 404
     chat_id = app.post("/api/chats", json={}).json()["id"]
     assert app.post(f"/api/chats/{chat_id}/turns", json={"text": ""}).status_code == 422
+
+
+def test_a_view_is_saved_without_a_revision_query_or_feed_entry(source):
+    app = client({"actions": [create()]}, "Games lead at 105.")
+    chat_id = app.post("/api/chats", json={}).json()["id"]
+    app.post(f"/api/chats/{chat_id}/turns", json={"text": "sales by category?"})
+    before = app.get(f"/api/chats/{chat_id}").json()
+    path = f"/api/chats/{chat_id}/charts/c1/view"
+
+    assert app.put(path, json={"kind": "donut"}).json()["view"] == "donut"
+    after = app.get(f"/api/chats/{chat_id}").json()
+    chart = after["charts"][0]
+    assert (chart["view"], chart["spec"]["kind"], chart["revision"]) == (
+        "donut",
+        "bar",
+        1,
+    )
+    assert chart["run"]["id"] == before["charts"][0]["run"]["id"]
+    assert after["events"] == before["events"]
+
+    # The spec's own kind is the default; kinds the result does not fit are refused.
+    assert app.put(path, json={"kind": "bar"}).json()["view"] is None
+    assert app.put(path, json={"kind": "scatter3d"}).status_code == 400
+    assert (
+        app.put(
+            f"/api/chats/{chat_id}/charts/c9/view", json={"kind": "bar"}
+        ).status_code
+        == 404
+    )
