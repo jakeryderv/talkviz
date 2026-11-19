@@ -1,9 +1,11 @@
+import { ArrowUp, ChevronDown, Code2, Download, Keyboard, Mic, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Settings as SettingsIcon, SlidersHorizontal, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Chart, Chat, FeedEvent, Kind, Narrow, Run, Source } from "./api";
 import { ChartBody, figure } from "./charts/ChartBody";
 import { date, number, slug } from "./charts/format";
 import { seriesOf, titled } from "./charts/plot";
 import { short } from "./Settings";
+import { IconButton, Menu } from "./ui";
 import { VoiceBar } from "./Voice";
 
 const BARS = [
@@ -40,24 +42,46 @@ export function Sidebar(props: {
   onNew: () => void;
   onDelete: (id: string) => void;
   onSettings: () => void;
+  /** Shown as a narrow rail, to give the charts more room. */
+  collapsed: boolean;
+  onCollapse: (collapsed: boolean) => void;
 }) {
   const { chats, active, source } = props;
+  if (props.collapsed)
+    return (
+      <aside className="flex min-h-0 flex-col items-center gap-1 border-r border-line bg-surface py-3">
+        <IconButton label="Show chats" onClick={() => props.onCollapse(false)}>
+          <PanelLeftOpen size={16} />
+        </IconButton>
+        <IconButton label="New chat" onClick={props.onNew}>
+          <Plus size={16} />
+        </IconButton>
+        <span className="flex-1" />
+        <IconButton label="Settings" onClick={props.onSettings}>
+          <SettingsIcon size={16} />
+        </IconButton>
+      </aside>
+    );
   return (
     <aside className="flex min-h-0 flex-col border-r border-line bg-surface">
-      <div className="flex items-center gap-2 px-4 pt-4 pb-3">
-        <Wave size={26} />
-        <span className="text-xl font-bold tracking-tight">
+      <div className="flex items-center gap-2 py-3 pr-2 pl-4">
+        <Wave size={22} />
+        <span className="flex-1 text-lg font-bold tracking-tight">
           <span className="text-ink">talk</span>
           <span className="text-primary">viz</span>
         </span>
+        <IconButton label="Hide chats" onClick={() => props.onCollapse(true)}>
+          <PanelLeftClose size={16} />
+        </IconButton>
       </div>
       <div className="px-3 pb-3">
         <button
           type="button"
           onClick={props.onNew}
-          className="w-full cursor-pointer rounded-md border border-line-strong px-3 py-2 text-left text-sm text-ink hover:border-primary hover:text-ink-strong"
+          className="flex w-full cursor-pointer items-center gap-2 rounded-md border border-line-strong px-2.5 py-1.5 text-left text-sm text-ink hover:border-ink-faint hover:text-ink-strong"
         >
-          + New chat
+          <Plus size={15} aria-hidden />
+          New chat
         </button>
       </div>
       <nav className="min-h-0 flex-1 overflow-y-auto px-2" aria-label="Chats">
@@ -96,9 +120,9 @@ export function Sidebar(props: {
             </>
           )}
         </div>
-        <button type="button" onClick={props.onSettings} className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-ink-muted hover:bg-raised hover:text-ink-strong">
-          Settings
-        </button>
+        <IconButton label="Settings" onClick={props.onSettings}>
+          <SettingsIcon size={16} />
+        </IconButton>
       </div>
     </aside>
   );
@@ -219,7 +243,6 @@ function Pane(props: {
 }) {
   const { chart, source, beside } = props;
   const [details, setDetails] = useState(false);
-  const [saving, setSaving] = useState(false);
   const kind = chart.view ?? chart.spec.kind;
   const run = chart.run;
   const spec = chart.views.find((view) => view.kind === kind) ?? chart.spec;
@@ -247,14 +270,13 @@ function Pane(props: {
     download(`${slug(chart.title)}.csv`, url);
     URL.revokeObjectURL(url);
   };
-  const quiet = "cursor-pointer rounded-md border px-2.5 py-1.5 text-xs";
 
   return (
-    <section className={`flex min-h-0 min-w-0 flex-col bg-bg ${beside ? "p-3" : "p-5 pb-3"} ${props.wide ? "col-span-2" : ""}`}>
-      <header className={`flex flex-wrap items-start ${beside ? "mb-2 gap-2" : "mb-4 gap-3"}`}>
+    <section className={`flex min-h-0 min-w-0 flex-col bg-bg ${beside ? "p-3" : "px-5 pt-4 pb-3"} ${props.wide ? "col-span-2" : ""}`}>
+      <header className={`flex items-start gap-1.5 ${beside ? "mb-2" : "mb-3"}`}>
         <div className="min-w-0 flex-1">
-          <h1 className={`truncate font-semibold text-ink-strong ${beside ? "text-sm" : "text-lg"}`}>{chart.title}</h1>
-          <p className="text-xs text-ink-faint">
+          <h1 className={`truncate font-semibold text-ink-strong ${beside ? "text-sm" : "text-base"}`}>{chart.title}</h1>
+          <p className="truncate text-xs text-ink-muted">
             {KINDS[spec.kind]}
             {run && ` · ${number(run.rows.length)} ${run.rows.length === 1 ? "row" : "rows"} · data as of ${run.data_version}`}
             {chart.revision > 1 && ` · revision ${chart.revision}`}
@@ -266,95 +288,44 @@ function Pane(props: {
             )}
           </p>
         </div>
-        {chart.views.length > 1 && beside && (
-          <select
-            aria-label="View"
-            value={spec.kind}
-            onChange={(event) => props.onDraw(chart.id, event.target.value as Kind)}
-            className="cursor-pointer rounded-md border border-line-strong bg-bg px-2 py-1.5 text-xs text-ink"
-          >
-            {chart.views.map((view) => (
-              <option key={view.kind} value={view.kind}>
-                {KINDS[view.kind]}
-              </option>
-            ))}
-          </select>
+        {chart.views.length > 1 && (
+          <Menu
+            name="View"
+            label={
+              <>
+                {KINDS[spec.kind]}
+                <ChevronDown size={13} aria-hidden />
+              </>
+            }
+            items={chart.views.map((view) => ({
+              key: view.kind,
+              label: KINDS[view.kind],
+              checked: view.kind === spec.kind,
+              onSelect: () => props.onDraw(chart.id, view.kind),
+            }))}
+          />
         )}
-        {chart.views.length > 1 && !beside && (
-          <div className="flex rounded-md border border-line-strong p-0.5 text-xs" role="group" aria-label="View">
-            {chart.views.map((view) => (
-              <button
-                key={view.kind}
-                type="button"
-                aria-pressed={spec.kind === view.kind}
-                onClick={() => props.onDraw(chart.id, view.kind)}
-                className={`cursor-pointer rounded px-2.5 py-1 ${spec.kind === view.kind ? "bg-raised text-ink-strong" : "text-ink-muted hover:text-ink"}`}
-              >
-                {KINDS[view.kind]}
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="relative">
-          <button
-            type="button"
-            aria-expanded={saving}
-            aria-haspopup="menu"
-            onClick={() => setSaving((open) => !open)}
-            className={`${quiet} ${saving ? "border-primary text-ink-strong" : "border-line-strong text-ink-muted hover:text-ink"}`}
-          >
-            Download
-          </button>
-          {saving && (
-            <div role="menu" className="absolute right-0 z-20 mt-1 w-44 rounded-md border border-line-strong bg-raised p-1 text-sm shadow-xl shadow-black/40">
-              {fig && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="block w-full cursor-pointer rounded px-2.5 py-1.5 text-left text-ink hover:bg-line-strong hover:text-ink-strong"
-                  onClick={() => {
-                    setSaving(false);
-                    void saveImage();
-                  }}
-                >
-                  Image (PNG)
-                </button>
-              )}
-              <button
-                type="button"
-                role="menuitem"
-                className="block w-full cursor-pointer rounded px-2.5 py-1.5 text-left text-ink hover:bg-line-strong hover:text-ink-strong"
-                onClick={() => {
-                  setSaving(false);
-                  saveData();
-                }}
-              >
-                Data (CSV)
-              </button>
-            </div>
-          )}
-        </div>
-        <button
-          type="button"
-          aria-expanded={details}
-          onClick={() => setDetails((open) => !open)}
-          className={`${quiet} ${details ? "border-primary text-ink-strong" : "border-line-strong text-ink-muted hover:text-ink"}`}
-        >
-          {beside ? "Query" : "How this was computed"}
-        </button>
+        <Menu
+          name="Download"
+          label={<Download size={13} aria-hidden />}
+          items={[
+            ...(fig ? [{ key: "png", label: "Image (PNG)", onSelect: () => void saveImage() }] : []),
+            { key: "csv", label: "Data (CSV)", onSelect: saveData },
+          ]}
+        />
+        <IconButton label={details ? "Hide the query" : "Show the query behind this chart"} pressed={details} onClick={() => setDetails((open) => !open)}>
+          <Code2 size={15} />
+        </IconButton>
         {beside && (
-          <button
-            type="button"
-            aria-label={`Close ${chart.title}`}
-            onClick={() => props.onClose(chart.id)}
-            className={`${quiet} border-line-strong text-ink-muted hover:text-ink`}
-          >
-            ×
-          </button>
+          <IconButton label={`Close ${chart.title}`} onClick={() => props.onClose(chart.id)}>
+            <X size={15} />
+          </IconButton>
         )}
       </header>
-      <div className={`min-h-0 min-w-0 flex-1 overflow-auto transition-opacity ${props.busy ? "opacity-50" : ""}`}>
-        <ChartBody spec={spec} run={run} fig={fig} />
+      <div className={`relative min-h-0 min-w-0 flex-1 transition-opacity ${props.busy ? "opacity-50" : ""}`}>
+        <div className="absolute inset-0 overflow-auto">
+          <ChartBody spec={spec} run={run} fig={fig} />
+        </div>
       </div>
       {details && (
         <div className="mt-3 max-h-56 overflow-auto rounded-md border border-line bg-surface p-3">
@@ -421,7 +392,7 @@ export function Feed(props: {
     props.onSay(said);
   };
   return (
-    <section className="flex min-h-0 min-w-0 flex-col border-t border-line bg-surface" aria-label="Conversation">
+    <section className="flex min-h-0 min-w-0 flex-col bg-surface" aria-label="Conversation">
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-5 py-3" aria-live="polite">
         {props.events.map((event) =>
           event.kind === "chart" ? (
@@ -449,58 +420,64 @@ export function Feed(props: {
         <div ref={end} />
       </div>
       <form
-        className="flex gap-2 border-t border-line p-3"
+        className="m-3 mt-0 rounded-xl border border-line-strong bg-bg focus-within:border-primary"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
         }}
       >
-        <div role="group" aria-label="How to ask" className="flex shrink-0 rounded-md border border-line-strong p-0.5 text-sm">
-          {(["chat", "voice"] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              aria-pressed={props.mode === mode}
-              onClick={() => props.onMode(mode)}
-              className={`cursor-pointer rounded px-2.5 capitalize ${props.mode === mode ? "bg-raised text-ink-strong" : "text-ink-muted hover:text-ink"}`}
-            >
-              {mode}
-            </button>
-          ))}
-        </div>
         {props.mode === "voice" ? (
           <VoiceBar chatId={props.chatId} busy={busy} onInterrupt={props.onInterrupt} onSay={props.onSay} onError={props.onError} />
         ) : (
-          <>
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Ask about your data…"
-          aria-label="Your question"
-          autoFocus
-          className="min-w-0 flex-1 rounded-md border border-line-strong bg-bg px-3 py-2 text-ink-strong placeholder:text-ink-faint focus:border-primary focus:outline-none"
-        />
-        <button
-          type="submit"
-          disabled={busy || !text.trim()}
-          className="cursor-pointer rounded-md bg-primary px-4 py-2 font-medium text-white hover:bg-primary-bright disabled:cursor-default disabled:opacity-40"
-        >
-          Ask
-        </button>
-          </>
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Ask about your data…"
+            aria-label="Your question"
+            autoFocus
+            className="block h-11 w-full bg-transparent px-3.5 text-ink-strong outline-none placeholder:text-ink-faint focus-visible:outline-none"
+          />
         )}
+        <div className="flex items-center gap-2 px-2 pb-2">
+          <div role="group" aria-label="How to ask" className="flex shrink-0 rounded-md bg-surface p-0.5 text-xs">
+            {(["chat", "voice"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={props.mode === mode}
+                onClick={() => props.onMode(mode)}
+                className={`flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 capitalize ${props.mode === mode ? "bg-raised text-ink-strong" : "text-ink-muted hover:text-ink"}`}
+              >
+                {mode === "chat" ? <Keyboard size={13} aria-hidden /> : <Mic size={13} aria-hidden />}
+                {mode}
+              </button>
+            ))}
+          </div>
+          {props.running && (
+            <button
+              type="button"
+              onClick={props.onSettings}
+              title="Change the models and voice for this chat"
+              className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs text-ink-muted hover:bg-surface hover:text-ink-strong"
+            >
+              <SlidersHorizontal size={13} className="shrink-0" aria-hidden />
+              <span className="truncate">{props.running}</span>
+            </button>
+          )}
+          <span className="flex-1" />
+          {props.mode === "chat" && (
+            <button
+              type="submit"
+              disabled={busy || !text.trim()}
+              aria-label="Ask"
+              title="Ask"
+              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-primary text-white hover:bg-primary-bright disabled:cursor-default disabled:bg-raised disabled:text-ink-faint"
+            >
+              <ArrowUp size={16} />
+            </button>
+          )}
+        </div>
       </form>
-      {props.running && (
-        <button
-          type="button"
-          onClick={props.onSettings}
-          title="Change the models and voice for this chat"
-          className="flex min-w-0 cursor-pointer items-center gap-1.5 px-4 pb-2 text-left text-xs text-ink-faint hover:text-ink"
-        >
-          <span className="truncate">{props.running}</span>
-          <span className="shrink-0 rounded border border-line-strong px-1.5 text-ink-muted">Change</span>
-        </button>
-      )}
     </section>
   );
 }
@@ -552,10 +529,26 @@ export function ChartList(props: {
   full: boolean;
   onFocus: (id: string) => void;
   onToggle: (id: string) => void;
+  collapsed: boolean;
+  onCollapse: (collapsed: boolean) => void;
 }) {
+  if (props.collapsed)
+    return (
+      <aside className="flex min-h-0 flex-col items-center gap-1 border-l border-line bg-surface py-3">
+        <IconButton label="Show the chart list" onClick={() => props.onCollapse(false)}>
+          <PanelRightOpen size={16} />
+        </IconButton>
+        {props.charts.length > 0 && <span className="text-xs text-ink-muted tabular-nums">{props.charts.length}</span>}
+      </aside>
+    );
   return (
     <aside className="flex min-h-0 flex-col border-l border-line bg-surface">
-      <h2 className="px-4 pt-4 pb-2 text-xs font-medium tracking-wide text-ink-faint uppercase">Charts</h2>
+      <div className="flex items-center py-3 pr-2 pl-4">
+        <h2 className="flex-1 text-xs font-medium tracking-wide text-ink-muted uppercase">Charts</h2>
+        <IconButton label="Hide the chart list" onClick={() => props.onCollapse(true)}>
+          <PanelRightClose size={16} />
+        </IconButton>
+      </div>
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" aria-label="Charts in this chat">
         {props.charts.length === 0 && <p className="px-2.5 text-sm text-ink-faint">Charts you create appear here.</p>}
         {props.charts.map((chart) => {
