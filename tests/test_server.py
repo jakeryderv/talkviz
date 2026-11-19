@@ -4,6 +4,7 @@ from conftest import MANIFEST
 from fastapi.testclient import TestClient
 from test_llm import Scripted, create
 
+from talkviz import llm
 from talkviz.server import create_app
 from talkviz.sources import add_source
 from talkviz.store import Store
@@ -245,3 +246,48 @@ def test_a_lens_is_saved_with_the_chart_and_can_be_reset(source):
 
     assert app.delete(f"/api/chats/{chat_id}/charts/c1/lens").status_code == 204
     assert app.get(f"/api/chats/{chat_id}").json()["charts"][0]["lens"] is None
+
+
+def test_a_chat_keeps_its_own_settings_copied_from_the_defaults(source, monkeypatch):
+    for name in ("TALKVIZ_MODEL", "TALKVIZ_EFFORT", "TALKVIZ_SPEECH_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "secret")
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    app = client()
+    shown = app.get("/api/settings").json()
+    assert shown["defaults"]["model"] == llm.DEFAULT_MODEL
+    # Keys are reported as present or not, never sent.
+    assert shown["keys"] == {"openrouter": True, "elevenlabs": False}
+    assert "secret" not in app.get("/api/settings").text
+
+    first = app.post("/api/chats", json={}).json()["id"]
+    mine = {"model": "other/planner", "reply_model": None, "router": False}
+    assert app.put("/api/settings", json=mine).status_code == 200
+    second = app.post("/api/chats", json={}).json()["id"]
+    # The chat made earlier keeps what it started with.
+    assert app.get(f"/api/chats/{first}").json()["settings"]["model"] == (
+        llm.DEFAULT_MODEL
+    )
+    assert app.get(f"/api/chats/{second}").json()["settings"] == {
+        "model": "other/planner",
+        "effort": None,
+        "reply_model": None,
+        "reply_effort": None,
+        "router": False,
+    }
+    changed = {**mine, "effort": "high"}
+    assert app.put(f"/api/chats/{second}/settings", json=changed).status_code == 200
+    assert app.get(f"/api/chats/{second}").json()["settings"]["effort"] == "high"
+    assert app.put("/api/settings", json={"model": ""}).status_code == 422
+    assert app.put("/api/settings", json={**mine, "effort": "lots"}).status_code == 422
+
+
+def test_a_reply_records_the_models_and_time_behind_it(source):
+    app = client({"actions": [create()]}, "Games lead at 105.")
+    chat_id = app.post("/api/chats", json={}).json()["id"]
+    chosen = {"model": "some/planner", "reply_model": "some/replier", "router": False}
+    app.put(f"/api/chats/{chat_id}/settings", json=chosen)
+    turn = app.post(f"/api/chats/{chat_id}/turns", json={"text": "sales?"}).json()
+    reply = turn["events"][-1]
+    assert reply["models"] == {"plan": "some/planner", "reply": "some/replier"}
+    assert set(reply["seconds"]) == {"route", "plan", "speak"}

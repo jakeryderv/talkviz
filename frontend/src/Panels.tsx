@@ -3,6 +3,7 @@ import type { Chart, Chat, FeedEvent, Kind, Narrow, Run, Source } from "./api";
 import { ChartBody, figure } from "./charts/ChartBody";
 import { date, number, slug } from "./charts/format";
 import { seriesOf, titled } from "./charts/plot";
+import { short } from "./Settings";
 
 const BARS = [
   [51, 112, 32],
@@ -37,6 +38,7 @@ export function Sidebar(props: {
   onOpen: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  onSettings: () => void;
 }) {
   const { chats, active, source } = props;
   return (
@@ -82,14 +84,21 @@ export function Sidebar(props: {
           </div>
         ))}
       </nav>
-      {source && (
-        <div className="border-t border-line px-4 py-3 text-xs text-ink-faint">
-          <div className="truncate text-ink-muted" title={source.description}>
-            {source.title}
-          </div>
-          {source.data_version && <div>Data as of {source.data_version}</div>}
+      <div className="flex items-end justify-between gap-2 border-t border-line px-4 py-3 text-xs text-ink-faint">
+        <div className="min-w-0">
+          {source && (
+            <>
+              <div className="truncate text-ink-muted" title={source.description}>
+                {source.title}
+              </div>
+              {source.data_version && <div>Data as of {source.data_version}</div>}
+            </>
+          )}
         </div>
-      )}
+        <button type="button" onClick={props.onSettings} className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-ink-muted hover:bg-raised hover:text-ink-strong">
+          Settings
+        </button>
+      </div>
     </aside>
   );
 }
@@ -384,8 +393,11 @@ export function Feed(props: {
   events: FeedEvent[];
   pending: string | null;
   error: string | null;
+  /** What the chat runs on, in a line; opens the settings when clicked. */
+  running: string | null;
   onSay: (text: string) => void;
   onFocus: (chartId: string) => void;
+  onSettings: () => void;
 }) {
   const [text, setText] = useState("");
   const end = useRef<HTMLDivElement>(null);
@@ -416,7 +428,7 @@ export function Feed(props: {
               {OPS[event.op ?? ""] ?? "Chart"} · {event.title}
             </button>
           ) : (
-            <Line key={event.id} who={event.kind} text={event.text ?? ""} flagged={event.kind === "assistant" && event.verified === false ? unverified(event) : null} />
+            <Line key={event.id} who={event.kind} text={event.text ?? ""} flagged={event.kind === "assistant" && event.verified === false ? unverified(event) : null} made={event.kind === "assistant" ? made(event) : null} />
           ),
         )}
         {props.pending && <Line who="user" text={props.pending} />}
@@ -452,23 +464,39 @@ export function Feed(props: {
           Ask
         </button>
       </form>
+      {props.running && (
+        <button type="button" onClick={props.onSettings} title="Change what this chat runs on" className="cursor-pointer truncate px-4 pb-2 text-left text-xs text-ink-faint hover:text-ink">
+          {props.running}
+        </button>
+      )}
     </section>
   );
 }
 
-function Line({ who, text, flagged = null }: { who: "user" | "assistant"; text: string; flagged?: string | null }) {
+/** How a reply was produced: "claude-sonnet-5.5 → claude-haiku-5.5 · 4.1 s", or "fast path · 0.3 s". */
+function made(event: FeedEvent): string | null {
+  if (!event.models || !event.seconds) return null;
+  const { plan, reply } = event.models;
+  const who = [plan, reply].filter((m): m is string => Boolean(m)).map(short);
+  const total = Object.values(event.seconds).reduce((sum, s) => sum + s, 0);
+  const how = plan ? who.join(" → ") : ["fast path", ...who].join(" → ");
+  return `${how} · ${total.toFixed(1)} s`;
+}
+
+function Line({ who, text, flagged = null, made = null }: { who: "user" | "assistant"; text: string; flagged?: string | null; made?: string | null }) {
   return (
     <div className="flex gap-3">
       <span className={`w-5 shrink-0 pt-0.5 text-xs font-medium ${who === "user" ? "text-ink-faint" : "text-primary-bright"}`}>
         {who === "user" ? "You" : <Wave size={18} />}
       </span>
-      <p className={`max-w-3xl leading-relaxed ${who === "user" ? "text-ink-muted" : "text-ink-strong"}`}>
+      <p className={`max-w-3xl leading-relaxed ${who === "user" ? "text-ink-muted" : "text-ink-strong"}`} title={made ?? undefined}>
         {text}
         {flagged && (
           <span className="ml-2 cursor-help text-xs text-warning underline decoration-dotted underline-offset-2" title={flagged} tabIndex={0}>
             unverified
           </span>
         )}
+        {made && <span className="mt-0.5 block text-xs text-ink-faint">{made}</span>}
       </p>
     </div>
   );

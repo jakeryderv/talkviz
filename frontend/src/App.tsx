@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Chart, type Chat, type ChatView, type Kind, type Source } from "./api";
+import { api, type Chart, type Chat, type ChatView, type Kind, type ModelInfo, type Settings, type SettingsInfo, type Source } from "./api";
 import { ChartList, Feed, Sidebar, Workspace } from "./Panels";
+import { SettingsPanel, summary } from "./Settings";
 
 const MAX_SHOWN = 4;
 
@@ -12,13 +13,21 @@ export function App() {
   const [shown, setShown] = useState<string[]>([]);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<SettingsInfo | null>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
 
   useEffect(() => {
     api.sources().then(setSources).catch(fail);
     api.chats().then(setChats).catch(fail);
+    api.settings().then(setInfo).catch(fail);
   }, []);
+  // The model list is long and only the settings panel needs it.
+  useEffect(() => {
+    if (settingsOpen && models.length === 0) api.models().then(setModels).catch(() => {});
+  }, [settingsOpen, models.length]);
 
   const open = useCallback((id: string, chartIds?: string[]) => {
     setError(null);
@@ -53,12 +62,13 @@ export function App() {
     setPending(text);
     try {
       const chat = view?.chat ?? (await api.newChat());
-      const current = view ?? { chat, charts: [], events: [], shown: [] };
+      const current = view ?? { chat, settings: info?.defaults ?? (await api.chat(chat.id)).settings, charts: [], events: [], shown: [] };
       if (!view) setView(current);
       const turn = await api.say(chat.id, text);
       const changed = new Map(turn.charts.map((c) => [c.id, c]));
       setView({
         chat: turn.chat,
+        settings: current.settings,
         charts: [
           ...current.charts.map((c) => changed.get(c.id) ?? c),
           ...turn.charts.filter((c) => !current.charts.some((old) => old.id === c.id)),
@@ -112,6 +122,19 @@ export function App() {
     api.resetLens(view.chat.id, chartId).catch(fail);
   };
 
+  // Saves the open chat's settings, or with no chat open, the defaults.
+  const saveSettings = (settings: Settings, asDefault: boolean) => {
+    setSettingsOpen(false);
+    if (view) {
+      setView((v) => v && { ...v, settings });
+      api.saveSettings(view.chat.id, settings).catch(fail);
+    }
+    if (asDefault) {
+      setInfo((i) => i && { ...i, defaults: settings });
+      api.saveDefaults(settings).catch(fail);
+    }
+  };
+
   const remove = (id: string) => {
     api
       .deleteChat(id)
@@ -124,15 +147,26 @@ export function App() {
 
   const source = sources.find((s) => s.name === view?.chat.source) ?? sources[0];
   const charts = shown.flatMap((id) => view?.charts.find((c) => c.id === id) ?? []);
+  const settings = view?.settings ?? info?.defaults;
 
   return (
     <div className="grid h-full grid-cols-[240px_minmax(0,1fr)_260px]">
-      <Sidebar chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} />
+      <Sidebar chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} onSettings={() => setSettingsOpen(true)} />
       <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_minmax(180px,32%)]">
         <Workspace charts={charts} all={view?.charts ?? []} source={source} busy={pending !== null} onAsk={say} onDraw={draw} onReset={reset} onClose={toggle} />
-        <Feed events={view?.events ?? []} pending={pending} error={error} onSay={say} onFocus={show} />
+        <Feed events={view?.events ?? []} pending={pending} error={error} running={settings ? summary(settings) : null} onSay={say} onFocus={show} onSettings={() => setSettingsOpen(true)} />
       </main>
       <ChartList charts={view?.charts ?? []} shown={shown} full={shown.length >= MAX_SHOWN} onFocus={show} onToggle={toggle} />
+      {settingsOpen && settings && info && (
+        <SettingsPanel
+          settings={settings}
+          info={info}
+          models={models}
+          chat={view ? view.chat.title : null}
+          onSave={saveSettings}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </div>
   );
 }

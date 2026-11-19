@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import (
     Agent,
     AgentRunError,
+    ModelAPIError,
     ModelRetry,
     PromptedOutput,
     RunContext,
@@ -102,6 +103,12 @@ def speech_openrouter(
     return _openrouter(DEFAULT_SPEECH_MODEL, effort or DEFAULT_SPEECH_EFFORT)
 
 
+def exact(name: str, effort: str | None = None) -> Model:
+    """The OpenRouter model `name` with exactly this effort: no defaults and
+    nothing from the environment but the API key."""
+    return _openrouter(name, effort)
+
+
 MAX_TOKENS = 6000
 MODEL_TIMEOUT = 60.0  # seconds, for one model call
 
@@ -122,13 +129,30 @@ def _openrouter(name: str, effort: str | None) -> Model:
 class ModelFailed(Exception):
     """The model call failed, or it never returned a plan that passed validation."""
 
-    def __init__(self, message: str, problems: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        problems: list[str] | None = None,
+        unavailable: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.problems = problems or []
         """What was wrong with the last plan, if it got as far as returning one."""
+        self.unavailable = unavailable
+        """The model's name, if the provider refused or could not run it."""
+
+    @classmethod
+    def refused(cls, error: ModelAPIError) -> "ModelFailed":
+        """The provider would not run the model: a wrong name, no credit, down."""
+        return cls(str(error), unavailable=error.model_name)
 
     def reply(self) -> str:
         """What to tell the user."""
+        if self.unavailable:
+            return (
+                f"The model {self.unavailable} could not be used. Check the model"
+                " name in this chat's settings, or try another model."
+            )
         if not self.problems:
             return "Sorry, I couldn't work that out. Try asking another way."
         return f"Sorry, I couldn't do that. {self.problems[0]}"
@@ -252,6 +276,8 @@ def plan(
         result = agent.run_sync(
             _plan_prompt(question, workspace, history, hint), deps=deps
         )
+    except ModelAPIError as error:
+        raise ModelFailed.refused(error) from error
     except AgentRunError as error:
         raise ModelFailed(str(error), deps.problems) from error
     return Planned(result.output, deps.runs, result.all_messages_json())
@@ -277,8 +303,10 @@ def speak(
     prompt = _speech_prompt(question, planned, history)
     try:
         result = agent.run_sync(prompt, deps=deps)
-    except UnexpectedModelBehavior:  # retries ran out; other errors propagate
+    except UnexpectedModelBehavior:  # retries ran out
         return Spoken(_fallback(planned), False, b"[]", deps.rejected)
+    except ModelAPIError as error:
+        raise ModelFailed.refused(error) from error
     return Spoken(
         result.output.strip(), True, result.all_messages_json(), deps.rejected
     )

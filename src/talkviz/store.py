@@ -21,14 +21,16 @@ from typing import Any, Literal
 from platformdirs import user_data_path
 from pydantic import BaseModel
 
+from talkviz.settings import Settings
 from talkviz.sql import ColumnKind, QueryResult
 from talkviz.workspace import Chart, Lens, chart_order
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
     id TEXT PRIMARY KEY, source TEXT NOT NULL, title TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL, settings TEXT
 );
+CREATE TABLE IF NOT EXISTS preferences (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS charts (
     chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     id TEXT NOT NULL, title TEXT NOT NULL, sql TEXT NOT NULL, spec TEXT NOT NULL,
@@ -116,6 +118,11 @@ class Event(BaseModel):
     run_id: int | None = None
     view: str | None = None
     """The kind a set_view event changed the chart to."""
+    models: dict[str, str] | None = None
+    """Assistant only: the model that did each stage of the turn (route,
+    plan, reply). A stage that needed no model is left out."""
+    seconds: dict[str, float] | None = None
+    """Assistant only: time spent in each stage."""
 
 
 def default_path() -> Path:
@@ -135,31 +142,77 @@ class Store:
             for column in ("view", "lens", "parent", "narrow", "based_on"):
                 if column not in have:
                     db.execute(f"ALTER TABLE charts ADD COLUMN {column}")
+            # And before chats had settings.
+            if "settings" not in {
+                row["name"] for row in db.execute("PRAGMA table_info(chats)")
+            }:
+                db.execute("ALTER TABLE chats ADD COLUMN settings TEXT")
 
     # Chats
 
-    def create_chat(self, source: str) -> Chat:
+    def create_chat(self, source: str, settings: Settings | None = None) -> Chat:
         chat = Chat(
             id=uuid.uuid4().hex[:12], source=source, title="New chat", created_at=_now()
         )
         with self._db() as db:
             db.execute(
-                "INSERT INTO chats VALUES (:id, :source, :title, :created_at)",
-                chat.model_dump(),
+                "INSERT INTO chats (id, source, title, created_at, settings)"
+                " VALUES (:id, :source, :title, :created_at, :settings)",
+                {
+                    **chat.model_dump(),
+                    "settings": settings.model_dump_json() if settings else None,
+                },
             )
         return chat
+
+    # Settings
+
+    def chat_settings(self, chat_id: str) -> Settings | None:
+        """The chat's own settings; None for a chat made before chats had any."""
+        with self._db() as db:
+            row = db.execute(
+                "SELECT settings FROM chats WHERE id = ?", [chat_id]
+            ).fetchone()
+        return Settings.model_validate_json(row[0]) if row and row[0] else None
+
+    def set_chat_settings(self, chat_id: str, settings: Settings) -> None:
+        with self._db() as db:
+            db.execute(
+                "UPDATE chats SET settings = ? WHERE id = ?",
+                [settings.model_dump_json(), chat_id],
+            )
+
+    def default_settings(self) -> Settings | None:
+        """The settings new chats start with, if the user has saved any."""
+        with self._db() as db:
+            row = db.execute(
+                "SELECT value FROM preferences WHERE name = 'settings'"
+            ).fetchone()
+        return Settings.model_validate_json(row[0]) if row else None
+
+    def set_default_settings(self, settings: Settings) -> None:
+        with self._db() as db:
+            db.execute(
+                "INSERT INTO preferences VALUES ('settings', ?)"
+                " ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+                [settings.model_dump_json()],
+            )
 
     def chats(self) -> list[Chat]:
         """All chats, newest first."""
         with self._db() as db:
             rows = db.execute(
-                "SELECT * FROM chats ORDER BY created_at DESC, rowid DESC"
+                "SELECT id, source, title, created_at FROM chats"
+                " ORDER BY created_at DESC, rowid DESC"
             )
             return [Chat(**row) for row in rows]
 
     def chat(self, chat_id: str) -> Chat | None:
         with self._db() as db:
-            row = db.execute("SELECT * FROM chats WHERE id = ?", [chat_id]).fetchone()
+            row = db.execute(
+                "SELECT id, source, title, created_at FROM chats WHERE id = ?",
+                [chat_id],
+            ).fetchone()
         return Chat(**row) if row else None
 
     def rename_chat(self, chat_id: str, title: str) -> None:
