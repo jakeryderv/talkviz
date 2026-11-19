@@ -19,7 +19,18 @@ export type Run = {
 export type Spec =
   | { kind: "stat"; value: string; label: string }
   | { kind: "table" }
-  | { kind: "bar" | "line"; x: string; y: string; series?: string | null };
+  | { kind: "bar" | "stacked_bar" | "line" | "area"; x: string; y: string; series?: string | null }
+  | { kind: "donut" | "treemap"; label: string; value: string }
+  | { kind: "heatmap"; x: string; y: string; value: string }
+  | {
+      kind: "scatter" | "scatter3d";
+      x: string;
+      y: string;
+      z?: string | null;
+      color?: string | null;
+      label?: string | null;
+    };
+export type Kind = Spec["kind"];
 
 export type Chart = {
   id: string;
@@ -28,6 +39,8 @@ export type Chart = {
   spec: Spec;
   revision: number;
   run: Run | null;
+  /** Every way the result can be drawn, the chart's own spec first. */
+  views: Spec[];
 };
 
 export type FeedEvent = {

@@ -36,7 +36,10 @@ export function App() {
   }, [open]);
   useEffect(() => {
     const hash = view ? `#${view.chat.id}${focus ? `/${focus}` : ""}` : "";
-    if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname);
+    // Leave a chosen view (#chat/chart/view) alone while the chart is unchanged.
+    if (!hash || !location.hash.startsWith(`${hash}/`)) {
+      if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname);
+    }
   }, [view?.chat.id, focus]);
 
   const startNew = () => {

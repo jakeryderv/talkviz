@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import type { Chart, Chat, FeedEvent, Source } from "./api";
-import { ChartBody } from "./charts/ChartBody";
-import { date, number } from "./charts/format";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Chart, Chat, FeedEvent, Kind, Run, Source } from "./api";
+import { ChartBody, figure } from "./charts/ChartBody";
+import { date, number, slug } from "./charts/format";
+import { titled } from "./charts/plot";
 
 const BARS = [
   [51, 112, 32],
@@ -93,7 +94,34 @@ export function Sidebar(props: {
   );
 }
 
-const KINDS = { stat: "Number", table: "Table", bar: "Bar chart", line: "Line chart" } as const;
+const KINDS: Record<Kind, string> = {
+  stat: "Number",
+  table: "Table",
+  bar: "Bars",
+  stacked_bar: "Stacked bars",
+  line: "Line",
+  area: "Area",
+  donut: "Donut",
+  treemap: "Treemap",
+  heatmap: "Heatmap",
+  scatter: "Scatter",
+  scatter3d: "3D scatter",
+};
+
+function download(name: string, href: string) {
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = name;
+  link.click();
+}
+
+function csv(run: Run): string {
+  const quote = (value: unknown) => {
+    const text = value === null ? "" : String(value);
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  return [run.columns.map((c) => c.name), ...run.rows].map((row) => row.map(quote).join(",")).join("\n");
+}
 
 export function Workspace(props: {
   chart: Chart | undefined;
@@ -102,15 +130,34 @@ export function Workspace(props: {
   onAsk: (text: string) => void;
 }) {
   const { chart, source } = props;
-  const [asTable, setAsTable] = useState(false);
+  // The chosen view is kept in the address (#chat/chart/view) so it survives a reload.
+  const [kind, setKind] = useState<Kind | null>(() => (location.hash.split("/")[2] as Kind) ?? null);
   const [details, setDetails] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const shown = useRef(`${chart?.id}/${chart?.revision}`);
+  // A different chart, or a new revision of this one, opens in the view the agent chose.
   useEffect(() => {
-    setAsTable(false);
-  }, [chart?.id]);
+    const now = `${chart?.id}/${chart?.revision}`;
+    if (chart && shown.current !== "undefined/undefined" && shown.current !== now) setKind(null);
+    shown.current = now;
+    setSaving(false);
+  }, [chart?.id, chart?.revision]);
+  const choose = (view: Kind) => {
+    setKind(view);
+    const [chat, id] = location.hash.split("/");
+    if (chat && id) history.replaceState(null, "", `${chat}/${id}/${view}`);
+  };
 
-  if (!chart) {
+  const run = chart?.run ?? null;
+  const spec = chart ? (chart.views.find((view) => view.kind === kind) ?? chart.spec) : null;
+  const fig = useMemo(
+    () => (spec && run && spec.kind !== "stat" && spec.kind !== "table" ? figure(spec, run) : null),
+    [spec, run],
+  );
+
+  if (!chart || !spec) {
     return (
-      <section className="flex min-h-0 flex-col items-center justify-center gap-5 p-8 text-center">
+      <section className="flex min-h-0 min-w-0 flex-col items-center justify-center gap-5 p-8 text-center">
         <Wave size={56} live={props.busy} />
         <div>
           <h1 className="text-2xl font-semibold text-ink-strong">Talk to your data.</h1>
@@ -136,45 +183,103 @@ export function Workspace(props: {
       </section>
     );
   }
-  const run = chart.run;
-  const canChart = chart.spec.kind !== "table";
+
+  const subtitle = run ? `${source?.title ?? chart.title} · data as of ${run.data_version}` : "";
+  const saveImage = async () => {
+    if (!fig) return;
+    const Plotly = await import("plotly.js-dist-min");
+    const image = await Plotly.toImage(titled(fig, chart.title, subtitle) as Parameters<typeof Plotly.toImage>[0], {
+      format: "png",
+      width: 1400,
+      height: 800,
+      scale: 2,
+    });
+    download(`${slug(chart.title)}.png`, image);
+  };
+  const saveData = () => {
+    if (!run) return;
+    const url = URL.createObjectURL(new Blob([csv(run)], { type: "text/csv" }));
+    download(`${slug(chart.title)}.csv`, url);
+    URL.revokeObjectURL(url);
+  };
+  const quiet = "cursor-pointer rounded-md border px-2.5 py-1.5 text-xs";
+
   return (
     <section className="flex min-h-0 min-w-0 flex-col p-5 pb-3">
-      <header className="mb-4 flex items-start gap-3">
+      <header className="mb-4 flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold text-ink-strong">{chart.title}</h1>
           <p className="text-xs text-ink-faint">
-            {KINDS[chart.spec.kind]}
+            {KINDS[spec.kind]}
             {run && ` · ${number(run.rows.length)} ${run.rows.length === 1 ? "row" : "rows"} · data as of ${run.data_version}`}
             {chart.revision > 1 && ` · revision ${chart.revision}`}
           </p>
         </div>
-        {canChart && (
+        {chart.views.length > 1 && (
           <div className="flex rounded-md border border-line-strong p-0.5 text-xs" role="group" aria-label="View">
-            {[false, true].map((table) => (
+            {chart.views.map((view) => (
               <button
-                key={String(table)}
+                key={view.kind}
                 type="button"
-                aria-pressed={asTable === table}
-                onClick={() => setAsTable(table)}
-                className={`cursor-pointer rounded px-2.5 py-1 ${asTable === table ? "bg-raised text-ink-strong" : "text-ink-muted hover:text-ink"}`}
+                aria-pressed={spec.kind === view.kind}
+                onClick={() => choose(view.kind)}
+                className={`cursor-pointer rounded px-2.5 py-1 ${spec.kind === view.kind ? "bg-raised text-ink-strong" : "text-ink-muted hover:text-ink"}`}
               >
-                {table ? "Table" : "Chart"}
+                {KINDS[view.kind]}
               </button>
             ))}
           </div>
         )}
+        <div className="relative">
+          <button
+            type="button"
+            aria-expanded={saving}
+            aria-haspopup="menu"
+            onClick={() => setSaving((open) => !open)}
+            className={`${quiet} ${saving ? "border-primary text-ink-strong" : "border-line-strong text-ink-muted hover:text-ink"}`}
+          >
+            Download
+          </button>
+          {saving && (
+            <div role="menu" className="absolute right-0 z-20 mt-1 w-44 rounded-md border border-line-strong bg-raised p-1 text-sm shadow-xl shadow-black/40">
+              {fig && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="block w-full cursor-pointer rounded px-2.5 py-1.5 text-left text-ink hover:bg-line-strong hover:text-ink-strong"
+                  onClick={() => {
+                    setSaving(false);
+                    void saveImage();
+                  }}
+                >
+                  Image (PNG)
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full cursor-pointer rounded px-2.5 py-1.5 text-left text-ink hover:bg-line-strong hover:text-ink-strong"
+                onClick={() => {
+                  setSaving(false);
+                  saveData();
+                }}
+              >
+                Data (CSV)
+              </button>
+            </div>
+          )}
+        </div>
         <button
           type="button"
           aria-expanded={details}
           onClick={() => setDetails((open) => !open)}
-          className={`cursor-pointer rounded-md border px-2.5 py-1.5 text-xs ${details ? "border-primary text-ink-strong" : "border-line-strong text-ink-muted hover:text-ink"}`}
+          className={`${quiet} ${details ? "border-primary text-ink-strong" : "border-line-strong text-ink-muted hover:text-ink"}`}
         >
           How this was computed
         </button>
       </header>
-      <div className={`min-h-0 flex-1 transition-opacity ${props.busy ? "opacity-50" : ""}`}>
-        <ChartBody chart={chart} asTable={asTable} />
+      <div className={`min-h-0 min-w-0 flex-1 overflow-auto transition-opacity ${props.busy ? "opacity-50" : ""}`}>
+        <ChartBody spec={spec} run={run} fig={fig} />
       </div>
       {details && (
         <div className="mt-3 max-h-56 overflow-auto rounded-md border border-line bg-surface p-3">

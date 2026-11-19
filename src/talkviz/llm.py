@@ -33,7 +33,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from talkviz.charts import check_spec
+from talkviz.charts import MAX_SLICES, check_spec
 from talkviz.manifest import Manifest
 from talkviz.speech import numbers_in, unsupported_numbers
 from talkviz.sql import QueryRejected, QueryResult, check_and_run
@@ -386,9 +386,20 @@ writes the spoken reply from your charts' results, so you only plan charts.
 
 # Charts
 
+Pick the kind that answers the question most plainly. The user can switch a
+chart between the other kinds its result fits, so do not make a second chart
+only to show the same result another way.
+
 - stat: one headline number, from a query returning one row.
-- line: a number over time or another ordered axis.
-- bar: a number compared across categories.
+- line: a number over time or another ordered axis. area: the same, filled,
+  with `series` stacked to show a total and its make-up.
+- bar: a number compared across categories. stacked_bar: each bar split by
+  `series`, when the total matters as well as the parts.
+- donut: shares of a whole, for up to {MAX_SLICES} parts. treemap: the same for
+  more parts. Use these only when the question is about shares; otherwise bar.
+- heatmap: a number for every pair of two categories.
+- scatter: how two numbers relate, one point per row; `color` may be a
+  category or a third number. scatter3d: three numbers, only when asked for 3D.
 - table: a listing of records, or anything the others do not fit.
 - `series` splits a bar or line by a second column; keep to a few values.
 

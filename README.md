@@ -60,6 +60,12 @@ the chart in focus in the centre, the conversation below it, and the chat's
 charts on the right. Chats, charts, and every result are kept in a local
 SQLite file.
 
+Charts are drawn with Plotly from a small spec the model fills in: headline
+number, line, area, bars, stacked bars, donut, treemap, heatmap, scatter, 3D
+scatter, and table. Each chart offers every other view its result fits, so
+you can switch between, say, lines, stacked bars, and a heatmap without
+asking again. The Download button saves the chart as a PNG or its data as CSV.
+
 In a conversation you can refer back to charts: "make that a bar chart",
 "only since 2020", "show the first one again".
 

@@ -49,6 +49,11 @@ export function cell(value: Cell, column: Column, asCategory = false): string {
   return asCategory ? String(value).replace(/_/g, " ") : String(value);
 }
 
-export function seriesColor(index: number): string {
-  return `var(--color-series-${(index % 8) + 1})`;
+/** A design token's value, e.g. token("color-series-1"). */
+export function token(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
+}
+
+export function slug(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "chart";
 }
