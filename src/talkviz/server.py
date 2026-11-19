@@ -2,6 +2,7 @@
 built interface served from talkviz/web.
 """
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
@@ -199,7 +200,11 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
             )
         events.append(
             store.add_event(
-                chat.id, "assistant", text=taken.reply, verified=taken.reply_verified
+                chat.id,
+                "assistant",
+                text=taken.reply,
+                verified=taken.reply_verified,
+                rejected=[asdict(draft) for draft in taken.rejected] or None,
             )
         )
         return TurnView(

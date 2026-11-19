@@ -176,12 +176,30 @@ class Planned:
 
 
 @dataclass
+class Rejected:
+    """A draft reply that was not used."""
+
+    text: str
+    unsupported: list[str]
+    """The figures in it that are not in the query results."""
+
+
+@dataclass
 class Spoken:
     text: str
     verified: bool
     """False if the model never produced a reply whose numbers checked out, and
     `text` is a fallback."""
     messages: bytes
+    rejected: list[Rejected] = field(default_factory=list)
+    """Drafts that failed the number check, oldest first, whether or not a
+    later one passed."""
+
+
+@dataclass
+class SpeechDeps:
+    allowed: set[float]
+    rejected: list[Rejected] = field(default_factory=list)
 
 
 def plan(
@@ -236,20 +254,21 @@ def speak(
 ) -> Spoken:
     """Ask the model for the spoken reply to a planned turn."""
     allowed = _allowed_numbers(question, manifest, planned)
+    deps = SpeechDeps(allowed)
     agent = Agent(
         model,
-        deps_type=set,
+        deps_type=SpeechDeps,
         instructions=_speech_instructions(manifest),
         retries=RETRIES,
     )
     agent.output_validator(_validate_speech)
     prompt = _speech_prompt(question, planned, history)
     try:
-        result = agent.run_sync(prompt, deps=allowed)
+        result = agent.run_sync(prompt, deps=deps)
     except UnexpectedModelBehavior:  # retries ran out; other errors propagate
-        return Spoken(_fallback(planned), verified=False, messages=b"[]")
+        return Spoken(_fallback(planned), False, b"[]", deps.rejected)
     return Spoken(
-        result.output.strip(), verified=True, messages=result.all_messages_json()
+        result.output.strip(), True, result.all_messages_json(), deps.rejected
     )
 
 
@@ -272,25 +291,28 @@ def speak_stream(
     agent = Agent(model, instructions=_speech_instructions(manifest))
     first = prompt = _speech_prompt(question, planned, history)
     said: list[str] = []
+    rejected: list[Rejected] = []
     for _ in range(RETRIES + 1):
         with agent.run_stream_sync(prompt) as stream:
             deltas = stream.stream_text(delta=True, debounce_by=None)
             for sentence in _sentences(deltas):
                 unsupported = unsupported_numbers(sentence, allowed)
                 if unsupported:
+                    rejected.append(Rejected(sentence, unsupported))
                     break
                 yield f" {sentence}" if said else sentence
                 said.append(sentence)
             else:
-                yield Spoken(" ".join(said), True, stream.all_messages_json())
+                messages = stream.all_messages_json()
+                yield Spoken(" ".join(said), True, messages, rejected)
                 return
             messages = stream.all_messages_json()
         if said:
-            yield Spoken(" ".join(said), False, messages)
+            yield Spoken(" ".join(said), False, messages, rejected)
             return
         prompt = f"{first}\n\n{_unsupported(unsupported)}"
     yield _fallback(planned)
-    yield Spoken(_fallback(planned), False, b"[]")
+    yield Spoken(_fallback(planned), False, b"[]", rejected)
 
 
 def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
@@ -370,9 +392,10 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
     return output
 
 
-def _validate_speech(ctx: RunContext[set], output: str) -> str:
-    unsupported = unsupported_numbers(output, ctx.deps)
+def _validate_speech(ctx: RunContext[SpeechDeps], output: str) -> str:
+    unsupported = unsupported_numbers(output, ctx.deps.allowed)
     if unsupported:
+        ctx.deps.rejected.append(Rejected(output.strip(), unsupported))
         raise ModelRetry(_unsupported(unsupported))
     return output
 

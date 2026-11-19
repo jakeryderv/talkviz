@@ -1,13 +1,13 @@
 """One turn of a conversation: a question in, charts and a spoken reply out."""
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import duckdb
 
 from talkviz import llm
 from talkviz.charts import views, why_not
-from talkviz.llm import ChartRun, Exchange, Model, Plan, Planned
+from talkviz.llm import ChartRun, Exchange, Model, Plan, Planned, Rejected
 from talkviz.manifest import Manifest
 from talkviz.route import Router, Seen
 from talkviz.sql import QueryRejected, check_and_run
@@ -26,6 +26,8 @@ class Turn:
     messages: dict[str, bytes]
     """The raw model exchanges for each stage, as JSON."""
     shortcut: bool = False
+    rejected: list[Rejected] = field(default_factory=list)
+    """Draft replies that failed the number check."""
     """The router handled the turn, so no language model was called."""
 
 
@@ -85,6 +87,7 @@ def take_turn(
         },
         messages={"plan": planned.messages, "speak": spoken.messages},
         shortcut=shortcut,
+        rejected=spoken.rejected,
     )
 
 
