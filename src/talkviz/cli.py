@@ -29,6 +29,16 @@ def main() -> None:
     ask = commands.add_parser("ask", help="ask one question, or chat if none is given")
     ask.add_argument("question", nargs="?")
     _common(ask)
+    ask.add_argument(
+        "--speech-model",
+        help="OpenRouter model for the reply (default: TALKVIZ_SPEECH_MODEL, else"
+        f" {llm.DEFAULT_SPEECH_MODEL or 'the planning model'})",
+    )
+    ask.add_argument(
+        "--speech-effort",
+        choices=llm.EFFORTS,
+        help="reasoning effort for the reply model (default: TALKVIZ_SPEECH_EFFORT)",
+    )
 
     evaluation = commands.add_parser("eval", help="score a model on an eval file")
     evaluation.add_argument("eval_file", type=Path)
@@ -96,12 +106,15 @@ def _describe(model: llm.Model) -> str:
 def _ask(args: argparse.Namespace) -> None:
     source = load_source(args.source)
     model = llm.openrouter(args.model, args.effort)
+    speaker = llm.speech_openrouter(args.speech_model, args.speech_effort)
     workspace, history = Workspace(), list[Exchange]()
     with source.connect() as con:
         print(f"{source.manifest.title}, data as of {source.data_version(con)}")
         questions = [args.question] if args.question else iter(_prompt, None)
         for question in questions:
-            turn = take_turn(model, question, source.manifest, con, workspace, history)
+            turn = take_turn(
+                model, question, source.manifest, con, workspace, history, speaker
+            )
             _show(turn)
 
 

@@ -45,6 +45,9 @@ EFFORTS: tuple[str, ...] = get_args(Effort)
 DEFAULT_MODEL = "anthropic/claude-opus-5.5"
 # None leaves reasoning at the model's own default.
 DEFAULT_EFFORT: Effort | None = None
+# The model that writes the reply; None means the planning model does.
+DEFAULT_SPEECH_MODEL: str | None = None
+DEFAULT_SPEECH_EFFORT: Effort | None = None
 MAX_ACTIONS = 3
 RETRIES = 2
 # Rows of each result shown to the model when it writes the reply.
@@ -58,8 +61,28 @@ def openrouter(name: str | None = None, effort: str | None = None) -> Model:
     else TALKVIZ_EFFORT, else DEFAULT_EFFORT. Needs OPENROUTER_API_KEY in the
     environment.
     """
-    name = name or os.environ.get("TALKVIZ_MODEL") or DEFAULT_MODEL
-    effort = effort or os.environ.get("TALKVIZ_EFFORT") or DEFAULT_EFFORT
+    return _openrouter(
+        name or os.environ.get("TALKVIZ_MODEL") or DEFAULT_MODEL,
+        effort or os.environ.get("TALKVIZ_EFFORT") or DEFAULT_EFFORT,
+    )
+
+
+def speech_openrouter(
+    name: str | None = None, effort: str | None = None
+) -> Model | None:
+    """The OpenRouter model that writes replies, or None if the planner does.
+
+    Like openrouter(), with TALKVIZ_SPEECH_MODEL, TALKVIZ_SPEECH_EFFORT,
+    DEFAULT_SPEECH_MODEL and DEFAULT_SPEECH_EFFORT.
+    """
+    name = name or os.environ.get("TALKVIZ_SPEECH_MODEL") or DEFAULT_SPEECH_MODEL
+    if not name:
+        return None
+    effort = effort or os.environ.get("TALKVIZ_SPEECH_EFFORT") or DEFAULT_SPEECH_EFFORT
+    return _openrouter(name, effort)
+
+
+def _openrouter(name: str, effort: str | None) -> Model:
     settings = None
     if effort:
         if effort not in EFFORTS:
@@ -164,7 +187,7 @@ def speak(
     history: list[Exchange],
 ) -> Spoken:
     """Ask the model for the spoken reply to a planned turn."""
-    allowed = _allowed_numbers(question, planned)
+    allowed = _allowed_numbers(question, manifest, planned)
     agent = Agent(
         model,
         deps_type=set,
@@ -197,7 +220,7 @@ def speak_stream(
     cannot be taken back, so the reply ends at the last good sentence and is
     marked unverified. Either way the Spoken's text is the yielded chunks joined.
     """
-    allowed = _allowed_numbers(question, planned)
+    allowed = _allowed_numbers(question, manifest, planned)
     agent = Agent(model, instructions=_speech_instructions(manifest))
     first = prompt = _speech_prompt(question, planned, history)
     said: list[str] = []
@@ -278,8 +301,10 @@ def _unsupported(numbers: list[str]) -> str:
     )
 
 
-def _allowed_numbers(question: str, planned: Planned) -> set[float]:
-    allowed = numbers_in([question])
+def _allowed_numbers(question: str, manifest: Manifest, planned: Planned) -> set[float]:
+    # The reply is told to mention caveats, so their numbers ("since May 2021")
+    # are allowed too.
+    allowed = numbers_in([question, *manifest.caveats])
     for run in planned.runs:
         allowed |= numbers_in([run.chart.title, run.chart.sql, len(run.result.rows)])
         allowed |= numbers_in(value for row in run.result.rows for value in row)

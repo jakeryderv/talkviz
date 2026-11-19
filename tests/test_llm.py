@@ -55,6 +55,20 @@ def test_openrouter_sets_reasoning_effort(monkeypatch):
         llm.openrouter("some/model", "lots")
 
 
+def test_speech_openrouter_is_none_unless_a_speech_model_is_set(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
+    monkeypatch.setattr(llm, "DEFAULT_SPEECH_MODEL", None)
+    monkeypatch.delenv("TALKVIZ_SPEECH_MODEL", raising=False)
+    monkeypatch.setenv("TALKVIZ_SPEECH_EFFORT", "none")
+    monkeypatch.setenv("TALKVIZ_EFFORT", "high")
+    assert llm.speech_openrouter() is None
+    monkeypatch.setenv("TALKVIZ_SPEECH_MODEL", "small/model")
+    speaker = llm.speech_openrouter()
+    assert speaker is not None and speaker.model_name == "small/model"
+    # The planner's effort does not leak into the speaker's.
+    assert speaker.settings == {"openrouter_reasoning": {"effort": "none"}}
+
+
 def test_plan_runs_the_query_and_returns_the_chart(manifest, con):
     model = scripted({"actions": [create()]})
     planned = llm.plan(model, "sales by category?", manifest, con, Workspace(), [])
@@ -131,6 +145,17 @@ def test_speak_rejects_numbers_that_are_not_in_the_results(manifest, con):
     assert "250" in speaker.sent(1)
     # The results reached the model.
     assert "games | 105.0" in speaker.sent(0)
+
+
+def test_speak_may_use_numbers_from_the_caveats(manifest, con):
+    manifest = manifest.model_copy(
+        update={"caveats": ["Orders before March 2024 may be missing."]}
+    )
+    planner = scripted({"actions": [create()]})
+    planned = llm.plan(planner, "sales?", manifest, con, Workspace(), [])
+    speaker = scripted("Games lead with 105, though orders before 2024 may be missing.")
+    assert llm.speak(speaker, "sales?", manifest, planned, []).verified
+    assert len(speaker.seen) == 1
 
 
 def test_speak_falls_back_when_the_numbers_never_check_out(manifest, con):
@@ -247,6 +272,17 @@ def test_turns_build_up_a_workspace_and_edit_charts_in_place(manifest, con):
     # Later turns are told about the charts and the conversation so far.
     prompt = model.sent(6)
     assert "c1: 'Sales by category'" in prompt and "User: how many orders?" in prompt
+
+
+def test_a_separate_speaker_writes_the_reply(manifest, con):
+    planner = scripted({"actions": [create()]})
+    speaker = scripted("Games lead with 105.")
+    turn = take_turn(planner, "sales?", manifest, con, Workspace(), [], speaker=speaker)
+    assert (turn.reply, len(planner.seen), len(speaker.seen)) == (
+        "Games lead with 105.",
+        1,
+        1,
+    )
 
 
 def test_two_charts_created_in_one_turn_get_distinct_ids(manifest, con):
