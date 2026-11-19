@@ -1,6 +1,7 @@
 """The model calls, driven by scripted models instead of a real one."""
 
 import json
+from collections.abc import AsyncIterator
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
@@ -39,6 +40,33 @@ class Scripted(FunctionModel):
 
 
 scripted = Scripted
+
+
+def test_openrouter_sets_reasoning_effort(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
+    monkeypatch.delenv("TALKVIZ_EFFORT", raising=False)
+    assert not (llm.openrouter("some/model").settings or {})
+    model = llm.openrouter("some/model", "low")
+    assert model.settings == {"openrouter_reasoning": {"effort": "low"}}
+    monkeypatch.setenv("TALKVIZ_EFFORT", "none")
+    model = llm.openrouter("some/model")
+    assert model.settings == {"openrouter_reasoning": {"effort": "none"}}
+    with pytest.raises(ValueError, match="unknown reasoning effort"):
+        llm.openrouter("some/model", "lots")
+
+
+def test_speech_openrouter_is_none_unless_a_speech_model_is_set(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
+    monkeypatch.setattr(llm, "DEFAULT_SPEECH_MODEL", None)
+    monkeypatch.delenv("TALKVIZ_SPEECH_MODEL", raising=False)
+    monkeypatch.setenv("TALKVIZ_SPEECH_EFFORT", "none")
+    monkeypatch.setenv("TALKVIZ_EFFORT", "high")
+    assert llm.speech_openrouter() is None
+    monkeypatch.setenv("TALKVIZ_SPEECH_MODEL", "small/model")
+    speaker = llm.speech_openrouter()
+    assert speaker is not None and speaker.model_name == "small/model"
+    # The planner's effort does not leak into the speaker's.
+    assert speaker.settings == {"openrouter_reasoning": {"effort": "none"}}
 
 
 def test_plan_runs_the_query_and_returns_the_chart(manifest, con):
@@ -119,12 +147,83 @@ def test_speak_rejects_numbers_that_are_not_in_the_results(manifest, con):
     assert "games | 105.0" in speaker.sent(0)
 
 
+def test_speak_may_use_numbers_from_the_caveats(manifest, con):
+    manifest = manifest.model_copy(
+        update={"caveats": ["Orders before March 2024 may be missing."]}
+    )
+    planner = scripted({"actions": [create()]})
+    planned = llm.plan(planner, "sales?", manifest, con, Workspace(), [])
+    speaker = scripted("Games lead with 105, though orders before 2024 may be missing.")
+    assert llm.speak(speaker, "sales?", manifest, planned, []).verified
+    assert len(speaker.seen) == 1
+
+
 def test_speak_falls_back_when_the_numbers_never_check_out(manifest, con):
     planner = scripted({"actions": [create()]})
     planned = llm.plan(planner, "sales?", manifest, con, Workspace(), [])
     speaker = scripted(*["Games made 999."] * 3)
     spoken = llm.speak(speaker, "sales?", manifest, planned, [])
     assert (spoken.text, spoken.verified) == ("Here is Sales by category.", False)
+
+
+class Streamed(FunctionModel):
+    """A streaming model that sends each reply in the given pieces."""
+
+    def __init__(self, *replies: list[str]):
+        self.replies = list(replies)
+        self.seen: list[list[ModelMessage]] = []
+        super().__init__(stream_function=self.stream)
+
+    async def stream(
+        self, messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str]:
+        self.seen.append(list(messages))
+        for piece in self.replies.pop(0):
+            yield piece
+
+    sent = Scripted.sent
+
+
+def stream_reply(speaker, manifest, con):
+    question = "sales by category?"
+    planner = scripted({"actions": [create()]})
+    planned = llm.plan(planner, question, manifest, con, Workspace(), [])
+    *chunks, spoken = llm.speak_stream(speaker, question, manifest, planned, [])
+    assert all(isinstance(chunk, str) for chunk in chunks)
+    assert isinstance(spoken, llm.Spoken)
+    assert spoken.text == "".join(str(chunk) for chunk in chunks)
+    return chunks, spoken
+
+
+def test_speak_stream_yields_checked_sentences_then_the_result(manifest, con):
+    speaker = Streamed(
+        ["Games le", "ad with 105.", " Books follow at 4", "0.5 in sales."]
+    )
+    chunks, spoken = stream_reply(speaker, manifest, con)
+    assert chunks == ["Games lead with 105.", " Books follow at 40.5 in sales."]
+    assert spoken.verified
+    assert "games | 105.0" in speaker.sent(0)
+
+
+def test_speak_stream_retries_when_the_first_sentence_fails(manifest, con):
+    speaker = Streamed(["Games made 250. ", "Never sent."], ["Games made 105."])
+    chunks, spoken = stream_reply(speaker, manifest, con)
+    assert (chunks, spoken.verified) == (["Games made 105."], True)
+    assert "not in the query results: 250" in speaker.sent(1)
+
+
+def test_speak_stream_stops_at_a_bad_sentence_once_text_is_out(manifest, con):
+    speaker = Streamed(["Games lead with 105. ", "That is 62% of sales. ", "More."])
+    chunks, spoken = stream_reply(speaker, manifest, con)
+    assert chunks == ["Games lead with 105."]
+    assert not spoken.verified
+
+
+def test_speak_stream_falls_back_when_no_reply_checks_out(manifest, con):
+    speaker = Streamed(*[["Games made 999."]] * 3)
+    chunks, spoken = stream_reply(speaker, manifest, con)
+    assert chunks == ["Here is Sales by category."]
+    assert not spoken.verified
 
 
 def test_turns_build_up_a_workspace_and_edit_charts_in_place(manifest, con):
@@ -173,6 +272,17 @@ def test_turns_build_up_a_workspace_and_edit_charts_in_place(manifest, con):
     # Later turns are told about the charts and the conversation so far.
     prompt = model.sent(6)
     assert "c1: 'Sales by category'" in prompt and "User: how many orders?" in prompt
+
+
+def test_a_separate_speaker_writes_the_reply(manifest, con):
+    planner = scripted({"actions": [create()]})
+    speaker = scripted("Games lead with 105.")
+    turn = take_turn(planner, "sales?", manifest, con, Workspace(), [], speaker=speaker)
+    assert (turn.reply, len(planner.seen), len(speaker.seen)) == (
+        "Games lead with 105.",
+        1,
+        1,
+    )
 
 
 def test_two_charts_created_in_one_turn_get_distinct_ids(manifest, con):

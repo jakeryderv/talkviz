@@ -33,6 +33,11 @@ def test_lint_accepts_selects_over_manifest_tables(sql, manifest):
         ("COPY orders TO '/tmp/orders.csv'", "Only SELECT"),
         ("DESCRIBE orders", "Only SELECT"),
         ("SELECT FROM WHERE", "does not parse"),
+        ("SELECT current_setting('home_directory')", "current_setting"),
+        ("SELECT CURRENT_SETTING('temp_directory') AS t", "CURRENT_SETTING"),
+        ("SELECT count(*) FROM orders WHERE getenv('HOME') > ''", "getenv"),
+        ("SELECT current_query()", "current_query"),
+        ("SELECT (SELECT current_setting('home_directory'))", "current_setting"),
     ],
 )
 def test_lint_rejects_everything_else(sql, reason, manifest):

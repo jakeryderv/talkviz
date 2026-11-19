@@ -31,6 +31,14 @@ cp .env.example .env    # then add your OpenRouter key
 
 `OPENROUTER_API_KEY` is required. `TALKVIZ_MODEL` picks the model (any
 OpenRouter model id); the default is `anthropic/claude-opus-5.5`.
+`TALKVIZ_EFFORT` sets how much the model reasons before answering (`none`,
+`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); unset, each model uses its
+own default. `--model` and `--effort` override both for one command.
+
+The reply can come from a different, faster model than the one that plans
+the charts, since every number it says is checked against the results:
+`TALKVIZ_SPEECH_MODEL` and `TALKVIZ_SPEECH_EFFORT` (or `--speech-model` and
+`--speech-effort` on `ask`). Unset, the planning model also replies.
 
 ## Use
 
@@ -80,9 +88,11 @@ words and state the traps in `caveats`; the reply will mention them.
 
 An eval file is a YAML list of questions with a query that answers each
 correctly. A model passes a question when its query returns the same data.
+Each plan is timed, and the score is followed by the median and 90th
+percentile plan time.
 
 ```sh
-uv run talkviz eval path/to/eval.yaml --model anthropic/claude-haiku-5.5
+uv run talkviz eval path/to/eval.yaml --model anthropic/claude-haiku-5.5 --effort low
 ```
 
 ## Development
