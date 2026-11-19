@@ -5,13 +5,7 @@
       "release-type": "python",
       "package-name": "talkviz",
       "bump-minor-pre-major": true,
-      "extra-files": [
-        {
-          "type": "toml",
-          "path": "uv.lock",
-          "jsonpath": "$.package[?(@.name.value=='talkviz')].version"
-        }
-      ]
+      "include-component-in-tag": false
     }
   }
 }

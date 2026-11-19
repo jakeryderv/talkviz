@@ -28,6 +28,34 @@ jobs:
       - uses: googleapis/release-please-action@v5
         id: release
 
+      # release-please bumps the version in pyproject.toml but not in uv.lock,
+      # and `uv sync --locked` fails when they differ. Re-lock on the release
+      # branch whenever it exists and is out of date.
+      - name: Find the release branch
+        id: branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name=$(gh api "repos/${{ github.repository }}/pulls?state=open&per_page=100" \
+            --jq '[.[] | select(.head.ref | startswith("release-please--branches--main"))][0].head.ref // empty')
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.branch.outputs.name != ''
+        with:
+          ref: ${{ steps.branch.outputs.name }}
+      - uses: astral-sh/setup-uv@v10.3.3
+        if: steps.branch.outputs.name != ''
+      - name: Update uv.lock on the release branch
+        if: steps.branch.outputs.name != ''
+        run: |
+          uv lock
+          if ! git diff --quiet uv.lock; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore: update uv.lock for release" uv.lock
+            git push
+          fi
+
   publish:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
