@@ -51,6 +51,11 @@ about a quarter of a second, without the planning or reply models. Everything
 else, and any doubt or error, goes to the planner as usual. It uses
 OpenRouter's Decisions API, which is in alpha.
 
+The same fast path moves around a chart without changing its data: "zoom in
+on 2020 to 2024", "hide Ford", "bring Ford back", "zoom out", "show
+everything again". The zoom and hidden series are saved with the chart, like
+its view, and a Reset link under the title undoes them.
+
 A model you choose runs at its own default effort unless you set one.
 
 ## Use

@@ -160,6 +160,7 @@ export function Workspace(props: {
   busy: boolean;
   onAsk: (text: string) => void;
   onDraw: (chartId: string, kind: Kind) => void;
+  onReset: (chartId: string) => void;
   onClose: (chartId: string) => void;
 }) {
   const count = props.charts.length;
@@ -177,6 +178,7 @@ export function Workspace(props: {
           beside={count > 1}
           wide={count === 3 && i === 2}
           onDraw={props.onDraw}
+          onReset={props.onReset}
           onClose={props.onClose}
         />
       ))}
@@ -192,6 +194,7 @@ function Pane(props: {
   beside: boolean;
   wide: boolean;
   onDraw: (chartId: string, kind: Kind) => void;
+  onReset: (chartId: string) => void;
   onClose: (chartId: string) => void;
 }) {
   const { chart, source, beside } = props;
@@ -201,8 +204,8 @@ function Pane(props: {
   const run = chart.run;
   const spec = chart.views.find((view) => view.kind === kind) ?? chart.spec;
   const fig = useMemo(
-    () => (run && spec.kind !== "stat" && spec.kind !== "table" ? figure(spec, run) : null),
-    [spec, run],
+    () => (run && spec.kind !== "stat" && spec.kind !== "table" ? figure(spec, run, chart.lens) : null),
+    [spec, run, chart.lens],
   );
 
   const subtitle = run ? `${source?.title ?? chart.title} · data as of ${run.data_version}` : "";
@@ -235,6 +238,11 @@ function Pane(props: {
             {run && ` · ${number(run.rows.length)} ${run.rows.length === 1 ? "row" : "rows"} · data as of ${run.data_version}`}
             {chart.revision > 1 && ` · revision ${chart.revision}`}
             {fig?.note && ` · ${fig.note}`}
+            {chart.lens && fig?.note && (
+              <button type="button" onClick={() => props.onReset(chart.id)} className="ml-2 cursor-pointer text-primary-bright hover:underline">
+                Reset
+              </button>
+            )}
           </p>
         </div>
         {chart.views.length > 1 && beside && (
@@ -352,7 +360,7 @@ function unverified(event: FeedEvent): string {
   return `${why}, so it was left out. The chart and its numbers are unaffected.`;
 }
 
-const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing", set_view: "Redrawn" };
+const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing", set_view: "Redrawn", set_lens: "Adjusted" };
 
 export function Feed(props: {
   events: FeedEvent[];

@@ -105,6 +105,13 @@ export function App() {
     api.setView(view.chat.id, chartId, kind).catch(fail);
   };
 
+  // Puts the whole chart back in view.
+  const reset = (chartId: string) => {
+    if (!view) return;
+    setView((v) => v && { ...v, charts: v.charts.map((c) => (c.id === chartId ? { ...c, lens: null } : c)) });
+    api.resetLens(view.chat.id, chartId).catch(fail);
+  };
+
   const remove = (id: string) => {
     api
       .deleteChat(id)
@@ -122,7 +129,7 @@ export function App() {
     <div className="grid h-full grid-cols-[240px_minmax(0,1fr)_260px]">
       <Sidebar chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} />
       <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_minmax(180px,32%)]">
-        <Workspace charts={charts} source={source} busy={pending !== null} onAsk={say} onDraw={draw} onClose={toggle} />
+        <Workspace charts={charts} source={source} busy={pending !== null} onAsk={say} onDraw={draw} onReset={reset} onClose={toggle} />
         <Feed events={view?.events ?? []} pending={pending} error={error} onSay={say} onFocus={show} />
       </main>
       <ChartList charts={view?.charts ?? []} shown={shown} full={shown.length >= MAX_SHOWN} onFocus={show} onToggle={toggle} />

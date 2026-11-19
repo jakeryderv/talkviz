@@ -6,6 +6,8 @@ only ever handed charts it can render. views() lists the other ways the same
 result could be drawn, which the interface offers as a switch.
 """
 
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -157,6 +159,63 @@ def views(spec: Spec, result: QueryResult) -> list[Spec]:
             found.append(other)
     table = Table(kind="table")
     return found if table in found else [*found, table]
+
+
+def axis(spec: Spec, result: QueryResult) -> tuple[list[str], list[str]]:
+    """The chart's distinct x values and series names, in result order, as
+    text. Both empty for kinds that cannot be zoomed."""
+    if not isinstance(spec, Bar | Line) or check_spec(spec, result, legible=False):
+        return [], []
+    xs = list(dict.fromkeys(_text(value) for value in result.values(spec.x)))
+    if spec.series is None:
+        return xs, []
+    return xs, list(dict.fromkeys(_text(v) for v in result.values(spec.series)))
+
+
+def _text(value: object) -> str:
+    """A cell as the interface writes it, so both sides agree on axis values."""
+    if isinstance(value, date | datetime):
+        return value.isoformat()
+    if isinstance(value, float | Decimal) and value == int(value):
+        return str(int(value))
+    return str(value)
+
+
+def fit_lens(
+    spec: Spec,
+    result: QueryResult,
+    start: str | None,
+    end: str | None,
+    hidden: list[str],
+) -> tuple[str | None, str | None, list[str]]:
+    """(start, end, hidden) as they apply to this chart, with names matched
+    regardless of case and the range in axis order. Raises ValueError with the
+    reasons if they do not apply."""
+    xs, series = axis(spec, result)
+    if not xs:
+        raise ValueError("Only line, area, and bar charts can be zoomed.")
+    problems = []
+
+    def match(name: str, known: list[str], what: str) -> str | None:
+        found = next((k for k in known if k.lower() == name.strip().lower()), None)
+        if found is None:
+            shown = ", ".join(known[:40]) or "none"
+            problems.append(f"{name!r} is not one of the chart's {what}: {shown}.")
+        return found
+
+    if (start is None) != (end is None):
+        problems.append("Give both ends of the range to zoom to.")
+        start = end = None
+    if start is not None and end is not None:
+        start, end = match(start, xs, "x values"), match(end, xs, "x values")
+        if start is not None and end is not None and xs.index(start) > xs.index(end):
+            start, end = end, start
+    names = [found for name in hidden if (found := match(name, series, "series"))]
+    if series and len(set(names)) >= len(series):
+        problems.append("At least one series must stay in view.")
+    if problems:
+        raise ValueError(" ".join(problems))
+    return start, end, names
 
 
 def why_not(spec: Spec, kind: str, result: QueryResult) -> str:

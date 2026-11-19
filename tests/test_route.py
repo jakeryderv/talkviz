@@ -7,7 +7,7 @@ from test_llm import TOTALS, Scripted
 from talkviz.llm import Exchange
 from talkviz.route import Jev, Seen, Shortcut
 from talkviz.turn import take_turn
-from talkviz.workspace import Chart, Workspace
+from talkviz.workspace import Chart, SetLens, Workspace
 
 CHART = Chart.model_validate(
     {
@@ -38,8 +38,13 @@ def jev(answers: dict | None, status: int = 200) -> tuple[Jev, list[dict]]:
 class Fixed:
     """A router that always gives the same answer."""
 
-    def __init__(self, found: Shortcut | None) -> None:
+    def __init__(self, found: Shortcut | None, move: SetLens | None = None) -> None:
         self.found = found
+        self.move = move
+
+    def navigate(self, question, chart, xs, series) -> SetLens | None:
+        self.offered = (xs, series)
+        return self.move
 
     def shortcut(self, question, workspace, focus, seen) -> Shortcut | None:
         return self.found

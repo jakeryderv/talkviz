@@ -22,7 +22,7 @@ from platformdirs import user_data_path
 from pydantic import BaseModel
 
 from talkviz.sql import ColumnKind, QueryResult
-from talkviz.workspace import Chart
+from talkviz.workspace import Chart, Lens
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS chats (
 CREATE TABLE IF NOT EXISTS charts (
     chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     id TEXT NOT NULL, title TEXT NOT NULL, sql TEXT NOT NULL, spec TEXT NOT NULL,
-    revision INTEGER NOT NULL, position INTEGER NOT NULL, view TEXT,
+    revision INTEGER NOT NULL, position INTEGER NOT NULL, view TEXT, lens TEXT,
     PRIMARY KEY (chat_id, id)
 );
 CREATE TABLE IF NOT EXISTS chart_revisions (
@@ -129,11 +129,11 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
             db.executescript(_SCHEMA)
-            # Databases made before charts had a view.
-            if "view" not in {
-                row["name"] for row in db.execute("PRAGMA table_info(charts)")
-            }:
-                db.execute("ALTER TABLE charts ADD COLUMN view TEXT")
+            # Databases made before charts had a view or a lens.
+            have = {row["name"] for row in db.execute("PRAGMA table_info(charts)")}
+            for column in ("view", "lens"):
+                if column not in have:
+                    db.execute(f"ALTER TABLE charts ADD COLUMN {column} TEXT")
 
     # Chats
 
@@ -175,13 +175,19 @@ class Store:
         """The chat's charts as they are now, in the order they were created."""
         with self._db() as db:
             rows = db.execute(
-                "SELECT id, title, sql, spec, revision, view FROM charts"
+                "SELECT id, title, sql, spec, revision, view, lens FROM charts"
                 " WHERE chat_id = ?"
                 " ORDER BY position",
                 [chat_id],
             ).fetchall()
         return [
-            Chart.model_validate({**dict(row), "spec": json.loads(row["spec"])})
+            Chart.model_validate(
+                {
+                    **dict(row),
+                    "spec": json.loads(row["spec"]),
+                    "lens": json.loads(row["lens"]) if row["lens"] else None,
+                }
+            )
             for row in rows
         ]
 
@@ -192,11 +198,12 @@ class Store:
         with self._db() as db:
             db.execute(
                 "INSERT INTO charts VALUES (?, ?, ?, ?, ?, ?,"
-                " (SELECT count(*) FROM charts WHERE chat_id = ?1), ?)"
+                " (SELECT count(*) FROM charts WHERE chat_id = ?1), ?, ?)"
                 " ON CONFLICT (chat_id, id) DO UPDATE SET title = excluded.title,"
                 " sql = excluded.sql, spec = excluded.spec,"
-                " revision = excluded.revision, view = excluded.view",
-                [*values, chart.view],
+                " revision = excluded.revision, view = excluded.view,"
+                " lens = excluded.lens",
+                [*values, chart.view, _lens(chart.lens)],
             )
             db.execute(
                 "INSERT OR IGNORE INTO chart_revisions (chat_id, chart_id, title, sql,"
@@ -210,6 +217,14 @@ class Store:
             db.execute(
                 "UPDATE charts SET view = ? WHERE chat_id = ? AND id = ?",
                 [view, chat_id, chart_id],
+            )
+
+    def set_lens(self, chat_id: str, chart_id: str, lens: Lens | None) -> None:
+        """Record what part of a chart is in view. Not a revision."""
+        with self._db() as db:
+            db.execute(
+                "UPDATE charts SET lens = ? WHERE chat_id = ? AND id = ?",
+                [_lens(lens), chat_id, chart_id],
             )
 
     def save_run(
@@ -308,6 +323,10 @@ def _run(row: sqlite3.Row) -> Run:
     fields["columns"] = json.loads(fields["columns"])
     fields["rows"] = json.loads(fields["rows"])
     return Run.model_validate(fields)
+
+
+def _lens(lens: Lens | None) -> str | None:
+    return lens.model_dump_json() if lens else None
 
 
 def _plain(value: object) -> object:
