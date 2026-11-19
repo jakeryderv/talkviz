@@ -19,7 +19,7 @@ from typing import Literal, Protocol
 import httpx
 
 from talkviz.charts import KIND_NAMES
-from talkviz.workspace import Workspace
+from talkviz.workspace import Chart, SetLens, Workspace
 
 DEFAULT_ROUTER = "typesafe/jev-1.14"  # pinned: CONFIDENT was chosen on this version
 URL = "https://openrouter.ai/api/alpha/decisions"
@@ -27,16 +27,17 @@ CONFIDENT = 0.7
 """Least confidence to act on. In testing every wrong answer was at or below 0.6."""
 TIMEOUT = 2.0  # seconds; slower than this and the planner might as well go first
 MAX_FAILURES = 3  # in a row, after which the router stops being asked
+MAX_AXIS = 60  # x values offered as zoom ends; longer axes go to the planner
 
 
 @dataclass(frozen=True)
 class Shortcut:
     """A request that needs no planning."""
 
-    op: Literal["set_view", "show_chart"]
+    op: Literal["set_view", "show_chart", "navigate"]
     chart_ids: tuple[str, ...]
-    """The charts meant, in the order they were created. One for set_view;
-    one or more for show_chart."""
+    """The charts meant, in the order they were created. One or more for
+    show_chart; one otherwise."""
     kind: str | None = None
     """The kind to draw the chart as, for set_view."""
 
@@ -62,6 +63,16 @@ class Router(Protocol):
 
         `focus` is the id of the chart on screen. `seen` describes the latest
         result of each chart that has one, by chart id.
+        """
+        ...
+
+    def navigate(
+        self, question: str, chart: Chart, xs: list[str], series: list[str]
+    ) -> SetLens | None:
+        """How a "navigate" shortcut moves around `chart`, or None to plan it.
+
+        `xs` and `series` are the chart's x values and series names, as
+        charts.axis() gives them.
         """
         ...
 
@@ -95,7 +106,37 @@ class Jev:
         try:
             response = self.client.post(URL, json=body, headers=self.headers)
             response.raise_for_status()
-            found = _decide(response.json()["answers"], workspace)
+            answers = response.json()["answers"]
+            found = _decide(answers, workspace, focus or workspace.charts[-1].id)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError):
+            self.failures += 1
+            return None
+        self.failures = 0
+        return found
+
+    def navigate(
+        self, question: str, chart: Chart, xs: list[str], series: list[str]
+    ) -> SetLens | None:
+        if not xs or len(xs) > MAX_AXIS or self.failures >= MAX_FAILURES:
+            return None
+        hidden = chart.lens.hidden if chart.lens else []
+        details = {
+            "title": chart.title,
+            "drawn_as": chart.shown,
+            "axis": getattr(chart.spec, "x", None),
+            "axis_values": xs,
+            "series": series,
+            "hidden_series": hidden,
+        }
+        body = {
+            "model": self.model,
+            "state": {"chart": details, "user_says": question},
+            "questions": _lens_questions(xs, series),
+        }
+        try:
+            response = self.client.post(URL, json=body, headers=self.headers)
+            response.raise_for_status()
+            found = _move(response.json()["answers"], chart.id, series)
         except (httpx.HTTPError, KeyError, TypeError, ValueError):
             self.failures += 1
             return None
@@ -162,8 +203,14 @@ def _questions(workspace: Workspace) -> dict:
                     " a new query."
                 ),
                 "change": (
-                    "Asks to change what an existing chart shows: its filter, time"
-                    " range, grouping, measure, how many items, or its title."
+                    "Asks to change what an existing chart shows: filter it to"
+                    " some rows, change its grouping, measure, how many items,"
+                    " or its title."
+                ),
+                "navigate": (
+                    "Asks only to move around an existing chart without changing"
+                    " its data: zoom in or out, focus on a range, hide or bring"
+                    " back one of its series, or reset the zoom."
                 ),
                 "redraw": (
                     "Asks only to draw an existing chart's same data as a"
@@ -191,14 +238,23 @@ def _questions(workspace: Workspace) -> dict:
     }
 
 
-def _decide(answers: dict, workspace: Workspace) -> Shortcut | None:
+_SHORTCUTS = ("redraw", "show", "navigate")
+
+
+def _decide(answers: dict, workspace: Workspace, focus: str) -> Shortcut | None:
     route = answers["route"]
-    if route["confidence"] < CONFIDENT or route["choice"] not in ("redraw", "show"):
+    if route["confidence"] < CONFIDENT or route["choice"] not in _SHORTCUTS:
         return None
     meant = {chart.id: answers[chart.id]["noul"] for chart in workspace.charts}
+    charts = tuple(chart for chart, yes in meant.items() if yes >= CONFIDENT)
+    if route["choice"] == "navigate":
+        # "Hide Ford" seldom names a chart: it means the one on screen. What
+        # it asks for is then checked against that chart's own values.
+        if len(charts) > 1:
+            return None
+        return Shortcut("navigate", charts or (focus,))
     if any(1 - CONFIDENT < yes < CONFIDENT for yes in meant.values()):
         return None  # unsure about a chart
-    charts = tuple(chart for chart, yes in meant.items() if yes >= CONFIDENT)
     if not charts:
         return None
     if route["choice"] == "show":
@@ -208,3 +264,70 @@ def _decide(answers: dict, workspace: Workspace) -> Shortcut | None:
     if len(charts) != 1 or not known:
         return None
     return Shortcut("set_view", charts, kind["choice"])
+
+
+def _lens_questions(xs: list[str], series: list[str]) -> dict:
+    ends = {"none": "They gave no range."}
+    named = {
+        f"s{index}": {
+            "type": "noul",
+            "instructions": f"Does the user name the series {name!r}?",
+            "criteria": {"true": "They name it.", "false": "They do not name it."},
+        }
+        for index, name in enumerate(series)
+    }
+    return {
+        "action": {
+            "type": "choice",
+            "instructions": "How does the user want to move around this chart?",
+            "criteria": {
+                "zoom": "Zoom in on, or focus on, a range along the bottom axis.",
+                "hide": "Hide one or more of its series.",
+                "show": (
+                    "Bring back one or more hidden series, keeping the rest as"
+                    " they are."
+                ),
+                "zoom_out": "Zoom back out to the whole axis.",
+                "reset": "Undo all zooming and hiding: show everything again.",
+                "none": "None of these.",
+            },
+        },
+        "from": {
+            "type": "choice",
+            "instructions": "Where along the axis should the zoomed range start?",
+            "criteria": {**{x: f"Start at {x}." for x in xs}, **ends},
+        },
+        "to": {
+            "type": "choice",
+            "instructions": "Where along the axis should the zoomed range end?",
+            "criteria": {**{x: f"End at {x}." for x in xs}, **ends},
+        },
+        **named,
+    }
+
+
+def _move(answers: dict, chart_id: str, series: list[str]) -> SetLens | None:
+    action = answers["action"]
+    if action["confidence"] < CONFIDENT:
+        return None
+    if action["choice"] == "reset":
+        return SetLens(op="set_lens", chart_id=chart_id, reset=True)
+    if action["choice"] == "zoom_out":
+        return SetLens(op="set_lens", chart_id=chart_id, zoom_out=True)
+    if action["choice"] == "zoom":
+        start, end = answers["from"], answers["to"]
+        sure = min(start["confidence"], end["confidence"]) >= CONFIDENT
+        if not sure or "none" in (start["choice"], end["choice"]):
+            return None
+        return SetLens(
+            op="set_lens", chart_id=chart_id, start=start["choice"], end=end["choice"]
+        )
+    if action["choice"] not in ("hide", "show"):
+        return None
+    said = {name: answers[f"s{index}"]["noul"] for index, name in enumerate(series)}
+    names = [name for name, yes in said.items() if yes >= CONFIDENT]
+    if not names or any(1 - CONFIDENT < yes < CONFIDENT for yes in said.values()):
+        return None
+    if action["choice"] == "hide":
+        return SetLens(op="set_lens", chart_id=chart_id, hide=names)
+    return SetLens(op="set_lens", chart_id=chart_id, show=names)

@@ -223,3 +223,25 @@ def test_an_unverified_reply_keeps_the_drafts_and_figures_that_failed(source):
         app.get(f"/api/chats/{chat_id}").json()["events"][-1]["rejected"]
         == reply["rejected"]
     )
+
+
+MONTHLY = (
+    "SELECT month(ordered) AS month, category, sum(amount) AS total"
+    " FROM orders GROUP BY 1, 2 ORDER BY 1, 2"
+)
+SPEC = {"kind": "line", "x": "month", "y": "total", "series": "category"}
+
+
+def test_a_lens_is_saved_with_the_chart_and_can_be_reset(source):
+    monthly = create(title="Monthly sales", sql=MONTHLY, spec=SPEC)
+    zoom = {"op": "set_lens", "chart_id": "c1", "start": "2", "end": "3"}
+    app = client({"actions": [monthly]}, "Sales by month.", {"actions": [zoom]})
+    chat_id = app.post("/api/chats", json={}).json()["id"]
+    app.post(f"/api/chats/{chat_id}/turns", json={"text": "monthly sales?"})
+    turn = app.post(f"/api/chats/{chat_id}/turns", json={"text": "zoom in"}).json()
+    assert turn["charts"][0]["lens"] == {"start": "2", "end": "3", "hidden": []}
+    assert turn["charts"][0]["revision"] == 1
+    assert turn["events"][-1]["text"] == "Monthly sales now shows 2 to 3."
+
+    assert app.delete(f"/api/chats/{chat_id}/charts/c1/lens").status_code == 204
+    assert app.get(f"/api/chats/{chat_id}").json()["charts"][0]["lens"] is None

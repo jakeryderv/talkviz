@@ -6,12 +6,12 @@ from dataclasses import dataclass, field
 import duckdb
 
 from talkviz import llm
-from talkviz.charts import views, why_not
+from talkviz.charts import axis, fit_lens, views, why_not
 from talkviz.llm import ChartRun, Exchange, Model, Plan, Planned, Rejected
 from talkviz.manifest import Manifest
-from talkviz.route import Router, Seen
+from talkviz.route import Router, Seen, Shortcut
 from talkviz.sql import QueryRejected, check_and_run
-from talkviz.workspace import Chart, SetView, ShowChart, Workspace
+from talkviz.workspace import Chart, Lens, SetView, ShowChart, Workspace
 
 
 @dataclass
@@ -117,6 +117,11 @@ def _shortcut(
         results = [check_and_run(con, chart.sql, manifest) for chart in charts]
     except QueryRejected:
         return None
+    # "Show everything again" about the chart already on screen, zoomed or
+    # with series hidden, is a request to undo that, not to show it.
+    again = found.op == "show_chart" and found.chart_ids == (focus,)
+    if again and charts[0].lens is not None:
+        found = Shortcut("navigate", found.chart_ids)
     if found.op == "show_chart":
         shows = [ShowChart(op="show_chart", chart_id=chart.id) for chart in charts]
         runs = [
@@ -127,6 +132,22 @@ def _shortcut(
     if len(charts) != 1:
         return None
     chart, result = charts[0], results[0]
+    if found.op == "navigate":
+        move = router.navigate(question, chart, *axis(chart.spec, result))
+        if move is None:
+            return None
+        moved = workspace.resolve(move)
+        if moved.lens is not None:
+            lens = moved.lens
+            try:
+                fitted = fit_lens(chart.spec, result, lens.start, lens.end, lens.hidden)
+            except ValueError:
+                return None
+            start, end, hidden = fitted
+            moved = moved.model_copy(
+                update={"lens": Lens(start=start, end=end, hidden=hidden)}
+            )
+        return Planned(Plan(actions=[move]), [ChartRun(moved, result, move.op)], b"[]")
     if found.kind in [view.kind for view in views(chart.spec, result)]:
         action = SetView(op="set_view", chart_id=chart.id, kind=found.kind)
     else:

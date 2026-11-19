@@ -2,7 +2,7 @@
 // columns; everything drawn comes from the result rows.
 
 import type { Config, Data, Layout } from "plotly.js";
-import type { Cell, Column, Run, Spec } from "../api";
+import type { Cell, Column, Lens, Run, Spec } from "../api";
 import { cell, label, token } from "./format";
 
 export type Figure = {
@@ -128,8 +128,35 @@ function split(run: Run, by: string | null | undefined) {
   }));
 }
 
-function xy(spec: Extract<Plotted, { kind: "bar" | "stacked_bar" | "line" | "area" }>, run: Run, t: Theme): Figure {
+/** The rows inside the lens's range, and what to say about the lens. */
+function framed(run: Run, x: string, lens: Lens | null | undefined) {
+  if (!lens) return { run, notes: [] as string[] };
+  const notes: string[] = [];
+  if (lens.start !== null && lens.end !== null) {
+    const at = run.columns.findIndex((c) => c.name === x);
+    const all = distinct(run.rows.map((row) => String(row[at])));
+    const [from, to] = [all.indexOf(lens.start), all.indexOf(lens.end)];
+    // A range the data no longer has (it was re-run) is ignored, not guessed at.
+    if (from >= 0 && to >= from) {
+      const inside = new Set(all.slice(from, to + 1));
+      run = { ...run, rows: run.rows.filter((row) => inside.has(String(row[at]))) };
+      notes.push(lens.start === lens.end ? `Zoomed to ${lens.start}` : `Zoomed to ${lens.start} – ${lens.end}`);
+    }
+  }
+  if (lens.hidden.length) notes.push(`${lens.hidden.join(", ")} hidden`);
+  return { run, notes };
+}
+
+function xy(
+  spec: Extract<Plotted, { kind: "bar" | "stacked_bar" | "line" | "area" }>,
+  whole: Run,
+  t: Theme,
+  lens: Lens | null | undefined,
+): Figure {
   const isBar = spec.kind === "bar" || spec.kind === "stacked_bar";
+  const view = framed(whole, spec.x, lens);
+  let run = view.run;
+  const hidden = new Set(lens?.hidden ?? []);
   const categorical = isBar && reader(run).column(spec.x).kind !== "time";
   let note: string | undefined;
   if (categorical) {
@@ -154,10 +181,13 @@ function xy(spec: Extract<Plotted, { kind: "bar" | "stacked_bar" | "line" | "are
     const gy = group.rows.map((row) => ys[row] ?? null);
     const color = t.series[i % t.series.length] as string;
     const name = group.name || measure;
+    // A hidden series keeps its colour and legend entry, so it can be brought back.
+    const visible = hidden.has(group.name) ? ("legendonly" as const) : true;
     if (isBar) {
       return {
         type: "bar",
         name,
+        visible,
         orientation: horizontal ? "h" : "v",
         x: horizontal ? gy : gx,
         y: horizontal ? gx : gy,
@@ -170,6 +200,7 @@ function xy(spec: Extract<Plotted, { kind: "bar" | "stacked_bar" | "line" | "are
       type: "scatter",
       mode: "lines",
       name,
+      visible,
       x: gx,
       y: gy,
       line: { color, width: 2 },
@@ -191,13 +222,16 @@ function xy(spec: Extract<Plotted, { kind: "bar" | "stacked_bar" | "line" | "are
       showgrid: false,
       type: categorical ? "category" : undefined,
       tickformat: wholeNumbers ? "d" : undefined,
+      // One tick per year when there are few, so none is repeated.
+      dtick: wholeNumbers && distinct(xs).length <= 15 ? 1 : undefined,
     });
     layout.yaxis = axis(t, { rangemode: "tozero" });
     layout.hovermode = "x unified";
   }
   layout.barmode = spec.kind === "stacked_bar" ? "stack" : "group";
   layout.bargap = 0.3;
-  return { data, layout, note };
+  const notes = [...view.notes, ...(note ? [note] : [])];
+  return { data, layout, note: notes.join(" · ") || undefined };
 }
 
 function parts(spec: Extract<Plotted, { kind: "donut" | "treemap" }>, whole: Run, t: Theme): Figure {
@@ -357,14 +391,15 @@ function scatter(spec: Extract<Plotted, { kind: "scatter" | "scatter3d" }>, run:
   return { data, layout };
 }
 
-export function figure(spec: Plotted, run: Run): Figure {
+/** `lens` applies to line, area and bar charts; other kinds show everything. */
+export function figure(spec: Plotted, run: Run, lens?: Lens | null): Figure {
   const t = theme();
   switch (spec.kind) {
     case "bar":
     case "stacked_bar":
     case "line":
     case "area":
-      return xy(spec, run, t);
+      return xy(spec, run, t, lens);
     case "donut":
     case "treemap":
       return parts(spec, run, t);

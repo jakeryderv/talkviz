@@ -2,7 +2,8 @@
 
 A chart is a saved definition (title, SQL, spec), not data: showing it runs
 its query against the current database. Changing the definition adds a
-revision. Choosing another way to draw the same result (its view) does not.
+revision. Choosing another way to draw the same result (its view), or moving
+around it (its lens), does not.
 """
 
 from typing import Annotated, Literal
@@ -10,6 +11,16 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from talkviz.charts import ChartSpec
+
+
+class Lens(BaseModel):
+    """The part of a chart in view. Values are as charts.axis() gives them."""
+
+    start: str | None = None
+    end: str | None = None
+    """The first and last x values in view, both or neither."""
+    hidden: list[str] = []
+    """Series not drawn."""
 
 
 class Chart(BaseModel):
@@ -22,6 +33,10 @@ class Chart(BaseModel):
     """The kind the chart is drawn as, if not its spec's: one of the kinds
     charts.views() gives for its result. Not part of the definition."""
 
+    lens: Lens | None = None
+    """How the chart is zoomed and which series are hidden, if not all of it
+    is in view. Not part of the definition."""
+
     @property
     def shown(self) -> str:
         return self.view or self.spec.kind
@@ -29,6 +44,22 @@ class Chart(BaseModel):
 
 class _Action(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class SetLens(_Action):
+    """Move around an existing chart without changing its data: zoom to a
+    range along its x axis, hide or bring back series, or reset."""
+
+    op: Literal["set_lens"]
+    chart_id: str
+    start: str | None = Field(None, description="x value the zoom starts at.")
+    end: str | None = Field(None, description="x value the zoom ends at.")
+    hide: list[str] = Field(default=[], description="Series to hide.")
+    show: list[str] = Field(default=[], description="Hidden series to bring back.")
+    zoom_out: bool = Field(
+        False, description="Show the whole x axis again; hidden series stay hidden."
+    )
+    reset: bool = Field(False, description="Undo all zooming and hiding first.")
 
 
 class CreateChart(_Action):
@@ -65,7 +96,7 @@ class ShowChart(_Action):
     chart_id: str
 
 
-AnyAction = CreateChart | UpdateChart | SetView | ShowChart
+AnyAction = CreateChart | UpdateChart | SetView | SetLens | ShowChart
 Action = Annotated[AnyAction, Field(discriminator="op")]
 
 
@@ -96,11 +127,14 @@ class Workspace(BaseModel):
             # The spec's own kind is the default, stored as no view.
             view = None if action.kind == current.spec.kind else action.kind
             return current.model_copy(update={"view": view})
+        if isinstance(action, SetLens):
+            return current.model_copy(update={"lens": _moved(current.lens, action)})
         changes = action.model_dump(exclude={"op", "chart_id"}, exclude_none=True)
         if not changes:
             return current
-        # A new definition starts again in the view its spec names.
-        revised = {**changes, "revision": current.revision + 1, "view": None}
+        # A new definition starts again in the view its spec names, in full.
+        revised = {**changes, "revision": current.revision + 1}
+        revised |= {"view": None, "lens": None}
         return Chart.model_validate({**current.model_dump(), **revised})
 
     def apply(self, chart: Chart) -> None:
@@ -110,3 +144,17 @@ class Workspace(BaseModel):
                 self.charts[index] = chart
                 return
         self.charts.append(chart)
+
+
+def _moved(lens: Lens | None, action: SetLens) -> Lens | None:
+    """The lens after the action, or None if the whole chart is in view."""
+    base = Lens() if action.reset or lens is None else lens
+    if action.zoom_out:
+        base = Lens(hidden=base.hidden)
+    hidden = [name for name in [*base.hidden, *action.hide] if name not in action.show]
+    moved = Lens(
+        start=action.start if action.start is not None else base.start,
+        end=action.end if action.end is not None else base.end,
+        hidden=list(dict.fromkeys(hidden)),
+    )
+    return None if moved == Lens() else moved

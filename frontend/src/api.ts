@@ -32,12 +32,17 @@ export type Spec =
     };
 export type Kind = Spec["kind"];
 
+/** A zoom along the x axis (both ends or neither) and the series not drawn. */
+export type Lens = { start: string | null; end: string | null; hidden: string[] };
+
 export type Chart = {
   id: string;
   title: string;
   sql: string;
   spec: Spec;
   revision: number;
+  /** What part is in view, when not all of it. Saved with the chart. */
+  lens: Lens | null;
   /** The kind it is drawn as, when not the spec's own. Saved with the chart. */
   view: Kind | null;
   run: Run | null;
@@ -108,6 +113,8 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ kind }),
     }),
+  resetLens: (id: string, chartId: string) =>
+    request<void>(`/api/chats/${id}/charts/${chartId}/lens`, { method: "DELETE" }),
   rerun: (id: string, chartId: string) =>
     request<Chart>(`/api/chats/${id}/charts/${chartId}/run`, post()),
 };

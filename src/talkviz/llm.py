@@ -33,7 +33,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from talkviz.charts import KIND_NAMES, check_spec, views, why_not
+from talkviz.charts import KIND_NAMES, check_spec, fit_lens, views, why_not
 from talkviz.manifest import Manifest
 from talkviz.speech import numbers_in, unsupported_numbers
 from talkviz.sql import QueryRejected, QueryResult, check_and_run
@@ -41,6 +41,8 @@ from talkviz.workspace import (
     Action,
     Chart,
     CreateChart,
+    Lens,
+    SetLens,
     SetView,
     UpdateChart,
     Workspace,
@@ -146,6 +148,8 @@ class ChartRun:
     chart: Chart
     result: QueryResult
     op: str
+    note: str = ""
+    """Something the reply should know about the chart beyond its rows."""
 
 
 @dataclass
@@ -357,6 +361,19 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
                 f" and are now drawing it as {chart.shown!r}. Draw it as"
                 f" {asked!r}, or return no actions and a note saying why not."
             )
+        if isinstance(action, SetLens) and chart.lens is not None:
+            lens = chart.lens
+            try:
+                fitted = fit_lens(chart.spec, result, lens.start, lens.end, lens.hidden)
+            except ValueError as wrong:
+                problems.append(
+                    f"{where}: {wrong} If the user wants different data, not a"
+                    " different part of this chart, use update_chart."
+                )
+            else:
+                start, end, hidden = fitted
+                moved = Lens(start=start, end=end, hidden=hidden)
+                chart = chart.model_copy(update={"lens": moved})
         if isinstance(action, SetView):
             fits = [view.kind for view in views(chart.spec, result)]
             if action.kind not in fits:
@@ -384,7 +401,10 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
             # Only how the same result is drawn changed: a view, not a revision.
             view = None if chart.spec.kind == current.spec.kind else chart.spec.kind
             chart, op = current.model_copy(update={"view": view}), "set_view"
-        runs.append(ChartRun(chart, result, op))
+        note = ""
+        if op == "update_chart" and current is not None and current.lens is not None:
+            note = "The chart is back to its full view: no zoom, no series hidden."
+        runs.append(ChartRun(chart, result, op, note))
     deps.problems = told
     if problems:
         raise ModelRetry("Fix these problems and answer again:\n" + "\n".join(problems))
@@ -516,6 +536,12 @@ only to show the same result another way.
   give a different kind from the one they asked for.
 - When something they ask for cannot be done, say so and why in the note. Do
   not do something else in its place without saying.
+- set_lens when they only want to move around an existing line, area, or bar
+  chart: zoom to a range of its x axis (`start` and `end`, as x values the
+  chart has), `zoom_out` to the whole axis, hide or bring back series, or
+  `reset` everything. The data is unchanged. Use this for "zoom in on 2020
+  to 2024", "hide Ford", "zoom out", "show everything again". Use
+  update_chart when they want the data itself narrowed ("only since 2020").
 - show_chart when they ask to see an existing chart again. To show several
   charts side by side, give one show_chart for each; the charts of a turn
   are shown together.
@@ -554,6 +580,7 @@ def _plan_prompt(
         charts = "\n".join(
             f"- {c.id}: {c.title!r} spec={c.spec.model_dump_json(exclude_none=True)}"
             + (f" drawn as {c.view}" if c.view else "")
+            + (f" in view: {c.lens.model_dump_json()}" if c.lens else "")
             + f"\n  sql: {' '.join(c.sql.split())}"
             for c in workspace.charts
         )
@@ -585,6 +612,7 @@ def _speech_prompt(question: str, planned: Planned, history: list[Exchange]) -> 
         parts.append(
             f"Chart {_DID[run.op]}: {run.chart.title!r}"
             f" ({run.chart.shown}, {shown})\n{header}\n{rows}"
+            + (f"\n{run.note}" if run.note else "")
         )
     return "\n\n".join(parts)
 
@@ -594,24 +622,43 @@ _DID = {
     "update_chart": "updated",
     "show_chart": "shown",
     "set_view": "redrawn",
+    "set_lens": "zoomed or series hidden",
 }
 
 
 def view_reply(runs: list[ChartRun]) -> str | None:
     """A reply for a turn that only redrew charts or brought them back, which
     needs no model: there is nothing new to say about the data. None otherwise."""
-    if not runs or any(run.op not in ("set_view", "show_chart") for run in runs):
+    if not runs or any(run.op not in _FIXED for run in runs):
         return None
     if len(runs) > 1 and all(run.op == "show_chart" for run in runs):
         titles = [run.chart.title for run in runs]
         return f"Here are {', '.join(titles[:-1])} and {titles[-1]}, side by side."
-    return " ".join(
-        f"Here's {run.chart.title} again."
-        if run.op == "show_chart"
-        else f"Here's {run.chart.title} as"
-        f" {KIND_NAMES.get(run.chart.shown, run.chart.shown)}."
-        for run in runs
-    )
+    return " ".join(_fixed(run) for run in runs)
+
+
+_FIXED = ("set_view", "set_lens", "show_chart")
+
+
+def _fixed(run: ChartRun) -> str:
+    chart = run.chart
+    if run.op == "show_chart":
+        return f"Here's {chart.title} again."
+    if run.op == "set_view":
+        return f"Here's {chart.title} as {KIND_NAMES.get(chart.shown, chart.shown)}."
+    if chart.lens is None:
+        return f"{chart.title} is back to its full view."
+    lens, parts = chart.lens, []
+    if lens.start is not None:
+        only = lens.start == lens.end
+        parts.append(f"shows {lens.start}" + ("" if only else f" to {lens.end}"))
+    if lens.hidden:
+        names = lens.hidden
+        listed = (
+            names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+        )
+        parts.append(f"hides {listed}")
+    return f"{chart.title} now {' and '.join(parts)}."
 
 
 def _transcript(history: list[Exchange]) -> str:

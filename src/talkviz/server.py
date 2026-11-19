@@ -231,6 +231,11 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
         run = store.save_run(chat.id, chart, result, version)
         return _view(chart, run)
 
+    @app.delete("/api/chats/{chat_id}/charts/{chart_id}/lens", status_code=204)
+    def reset_lens(chart_id: str, chat: Current, store: Stored) -> None:
+        """Put the whole chart back in view. Not a revision."""
+        store.set_lens(chat.id, chart_id, None)
+
     @app.put("/api/chats/{chat_id}/charts/{chart_id}/view")
     def set_view(chart_id: str, body: View, chat: Current, store: Stored) -> ChartView:
         """Draw a chart's latest result another way. No query, revision, or
