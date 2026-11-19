@@ -151,6 +151,15 @@ def views(spec: Spec, result: QueryResult) -> list[Spec]:
     return found if table in found else [*found, table]
 
 
+def why_not(spec: Spec, kind: str, result: QueryResult) -> str:
+    """Why this chart's result cannot be drawn as `kind`, for a kind that
+    views() does not offer."""
+    other = _convert(spec, kind) if kind in _FAMILY else None
+    if other is None:
+        return f"its columns cannot play the roles a {kind} chart needs."
+    return " ".join(check_spec(other, result)) or "it is not a known chart kind."
+
+
 class _Check:
     def __init__(self, result: QueryResult) -> None:
         self.result = result

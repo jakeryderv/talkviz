@@ -33,7 +33,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from talkviz.charts import KIND_NAMES, MAX_SLICES, check_spec, views
+from talkviz.charts import KIND_NAMES, MAX_SLICES, check_spec, views, why_not
 from talkviz.manifest import Manifest
 from talkviz.speech import numbers_in, unsupported_numbers
 from talkviz.sql import QueryRejected, QueryResult, check_and_run
@@ -297,10 +297,14 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
         if isinstance(action, SetView):
             fits = [view.kind for view in views(chart.spec, result)]
             if action.kind not in fits:
+                # Say what is wrong, not what else would fit: offered the
+                # alternatives, the model picks one the user did not ask for.
                 problems.append(
-                    f"{where}: {chart.title!r} cannot be drawn as {action.kind!r}."
-                    f" Its result fits: {', '.join(fits)}. For anything else, use"
-                    " update_chart with a query that returns what the kind needs."
+                    f"{where}: the result of {chart.title!r} cannot be drawn as"
+                    f" {action.kind!r}: {why_not(chart.spec, action.kind, result)}"
+                    f" The user asked for {action.kind!r}, so do not draw it as"
+                    " another kind. Use update_chart on this chart instead, with"
+                    f" a {action.kind!r} spec and a query changed so that it fits."
                 )
         elif (
             isinstance(action, UpdateChart)
@@ -435,7 +439,8 @@ only to show the same result another way.
   ("only since 2015", "split it by make"). Send only the fields that change.
 - set_view when they only want an existing chart drawn another way ("make
   that a donut", "show it as a table"). It reuses the chart's result, so it
-  works only for kinds that result fits; you are told if it does not.
+  works only for kinds that result fits; you are told if it does not. Never
+  give a different kind from the one they asked for.
 - show_chart when they ask to see an existing chart again.
 - Titles are how the user refers to charts aloud: short, specific, distinct.
 - If the question cannot be answered from this dataset, or is too vague to

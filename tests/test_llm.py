@@ -355,4 +355,5 @@ def test_set_view_to_a_kind_the_result_does_not_fit_is_sent_back(manifest, con):
     take_turn(model, "sales by category?", manifest, con, workspace, history)
     take_turn(model, "show it in 3D", manifest, con, workspace, history)
     assert "cannot be drawn as 'scatter3d'" in model.sent(3)
+    assert "do not draw it as another kind" in model.sent(3)
     assert workspace.charts[0].view == "table"
