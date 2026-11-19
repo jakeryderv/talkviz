@@ -2,24 +2,30 @@
 built interface served from talkviz/web.
 """
 
+import os
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from talkviz import llm, route
+from talkviz import llm, route, settings
 from talkviz.charts import ChartSpec, views
 from talkviz.llm import Exchange, Model
+from talkviz.settings import Settings
 from talkviz.sources import Source, list_sources, load_source
 from talkviz.sql import QueryRejected, QueryResult, ResultColumn
 from talkviz.store import Chat, Event, Run, Store
-from talkviz.turn import take_turn
+from talkviz.turn import Turn, take_turn
 from talkviz.workspace import Chart, Workspace, run_chart
 
 WEB = Path(__file__).parent / "web"
+CATALOG_URL = "https://openrouter.ai/api/v1/models"
+CATALOG_SECONDS = 3600
 TITLE_LENGTH = 60
 MAX_SHOWN = 4  # charts side by side
 
@@ -42,8 +48,23 @@ class ChartView(Chart):
     """Every way the result can be drawn, the chart's own spec first."""
 
 
+class ModelInfo(BaseModel):
+    id: str
+    name: str
+
+
+class SettingsView(BaseModel):
+    defaults: Settings
+    """What a new chat starts with."""
+    efforts: list[str]
+    keys: dict[str, bool]
+    """Whether each service's API key is set. Keys themselves stay in the
+    environment and are never sent to the browser."""
+
+
 class ChatView(BaseModel):
     chat: Chat
+    settings: Settings
     charts: list[ChartView]
     events: list[Event]
     shown: list[str]
@@ -90,15 +111,27 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
     def get_store() -> Store:
         return app.state.store
 
-    def get_model() -> Model:
-        if app.state.model is None:
-            try:
-                app.state.model = llm.openrouter()
-                app.state.speaker = llm.speech_openrouter()
-                app.state.router = route.jev()
-            except Exception as error:  # whatever the provider raises
-                raise HTTPException(503, f"No model available: {error}") from error
-        return app.state.model
+    app.state.jev = None  # the router, made on first use
+    app.state.catalog = (0.0, [])  # when OpenRouter's models were listed, and they
+
+    def defaults() -> Settings:
+        return app.state.store.default_settings() or settings.from_environment()
+
+    def settings_of(chat: Chat) -> Settings:
+        return app.state.store.chat_settings(chat.id) or defaults()
+
+    def engines(chosen: Settings) -> tuple[Model, Model | None, route.Router | None]:
+        """The planner, reply model and router a turn runs on. A model given
+        to create_app() stands in for all the chat's settings name."""
+        if app.state.model is not None:
+            return app.state.model, app.state.speaker, app.state.router
+        try:
+            planner, speaker = settings.models(chosen)
+            if chosen.router and app.state.jev is None:
+                app.state.jev = route.jev()
+        except Exception as error:  # whatever the provider raises
+            raise HTTPException(503, f"No model available: {error}") from error
+        return planner, speaker, app.state.jev if chosen.router else None
 
     def get_chat(chat_id: str, store: Annotated[Store, Depends(get_store)]) -> Chat:
         chat = store.chat(chat_id)
@@ -123,13 +156,58 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
             source = load_source(body.source)
         except LookupError as error:
             raise HTTPException(400, str(error)) from error
-        return store.create_chat(source.name)
+        return store.create_chat(source.name, defaults())
+
+    @app.get("/api/settings")
+    def get_settings() -> SettingsView:
+        return SettingsView(
+            defaults=defaults(),
+            efforts=list(llm.EFFORTS),
+            keys={
+                "openrouter": bool(os.environ.get("OPENROUTER_API_KEY")),
+                "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
+            },
+        )
+
+    @app.put("/api/settings")
+    def save_defaults(body: Settings, store: Stored) -> Settings:
+        """Set what new chats start with. Existing chats keep their own."""
+        store.set_default_settings(body)
+        return body
+
+    @app.put("/api/chats/{chat_id}/settings")
+    def save_settings(body: Settings, chat: Current, store: Stored) -> Settings:
+        store.set_chat_settings(chat.id, body)
+        return body
+
+    @app.get("/api/models")
+    def models() -> list[ModelInfo]:
+        """OpenRouter's models, to pick from. Empty if they cannot be listed;
+        a model id can still be typed in."""
+        listed_at, listed = app.state.catalog
+        if listed and time.time() - listed_at < CATALOG_SECONDS:
+            return listed
+        try:
+            response = httpx.get(CATALOG_URL, timeout=10)
+            response.raise_for_status()
+            listed = sorted(
+                (
+                    ModelInfo(id=m["id"], name=m.get("name") or m["id"])
+                    for m in response.json()["data"]
+                ),
+                key=lambda m: m.id,
+            )
+        except (httpx.HTTPError, KeyError, TypeError, ValueError):
+            return listed
+        app.state.catalog = (time.time(), listed)
+        return listed
 
     @app.get("/api/chats/{chat_id}")
     def chat(chat: Current, store: Stored) -> ChatView:
         events = store.events(chat.id)
         return ChatView(
             chat=chat,
+            settings=settings_of(chat),
             charts=_views(store, chat.id, store.charts(chat.id)),
             events=events,
             shown=_shown(events),
@@ -149,8 +227,9 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
         body: Say,
         chat: Current,
         store: Stored,
-        model: Annotated[Model, Depends(get_model)],
     ) -> TurnView:
+        chosen = settings_of(chat)
+        model, speaker, router = engines(chosen)
         source = _source(chat)
         history = store.events(chat.id)
         workspace = Workspace(charts=store.charts(chat.id))
@@ -169,8 +248,8 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     con,
                     workspace,
                     _exchanges(history),
-                    speaker=app.state.speaker,
-                    router=app.state.router,
+                    speaker=speaker,
+                    router=router,
                     focus=(_shown(history) or [None])[-1],
                     seen=_seen(_views(store, chat.id, workspace.charts)),
                 )
@@ -218,6 +297,8 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                 text=taken.reply,
                 verified=taken.reply_verified,
                 rejected=[asdict(draft) for draft in taken.rejected] or None,
+                models=_models(chosen, taken, router),
+                seconds={k: round(v, 2) for k, v in taken.seconds.items()},
             )
         )
         return TurnView(
@@ -354,3 +435,16 @@ def _title(text: str) -> str:
     return (
         text if len(text) <= TITLE_LENGTH else text[: TITLE_LENGTH - 1].rstrip() + "…"
     )
+
+
+def _models(chosen: Settings, taken: Turn, router: route.Router | None) -> dict:
+    """The model behind each stage of a turn, leaving out stages that ran
+    without one: a shortcut has no plan, and a fixed sentence no reply."""
+    used = {}
+    if router is not None and (taken.shortcut or taken.seconds["route"] >= 0.01):
+        used["route"] = getattr(router, "model", "router")
+    if not taken.shortcut:
+        used["plan"] = chosen.model
+    if llm.view_reply(taken.runs) is None:
+        used["reply"] = chosen.reply_model or chosen.model
+    return used

@@ -73,10 +73,24 @@ export type FeedEvent = {
   revision?: number | null;
   title?: string | null;
   run_id?: number | null;
+  /** Assistant only: the model behind each stage (route, plan, reply) that used one. */
+  models?: Record<string, string> | null;
+  /** Assistant only: seconds spent in each stage. */
+  seconds?: Record<string, number> | null;
 };
+/** What a chat runs on. Null effort leaves reasoning to the model; a null reply model means the planner replies. */
+export type Settings = {
+  model: string;
+  effort: string | null;
+  reply_model: string | null;
+  reply_effort: string | null;
+  router: boolean;
+};
+export type SettingsInfo = { defaults: Settings; efforts: string[]; keys: Record<string, boolean> };
+export type ModelInfo = { id: string; name: string };
 
 export type Chat = { id: string; source: string; title: string; created_at: string };
-export type ChatView = { chat: Chat; charts: Chart[]; events: FeedEvent[]; shown: string[] };
+export type ChatView = { chat: Chat; settings: Settings; charts: Chart[]; events: FeedEvent[]; shown: string[] };
 export type TurnView = { chat: Chat; events: FeedEvent[]; charts: Chart[]; shown: string[] };
 export type Source = {
   name: string;
@@ -104,6 +118,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.status === 204 ? (undefined as T) : response.json();
 }
 
+const put = (body: unknown): RequestInit => ({ method: "PUT", body: JSON.stringify(body) });
 const post = (body?: unknown): RequestInit => ({
   method: "POST",
   body: body === undefined ? undefined : JSON.stringify(body),
@@ -124,6 +139,10 @@ export const api = {
     }),
   resetLens: (id: string, chartId: string) =>
     request<void>(`/api/chats/${id}/charts/${chartId}/lens`, { method: "DELETE" }),
+  settings: () => request<SettingsInfo>("/api/settings"),
+  models: () => request<ModelInfo[]>("/api/models"),
+  saveDefaults: (settings: Settings) => request<Settings>("/api/settings", put(settings)),
+  saveSettings: (id: string, settings: Settings) => request<Settings>(`/api/chats/${id}/settings`, put(settings)),
   rerun: (id: string, chartId: string) =>
     request<Chart>(`/api/chats/${id}/charts/${chartId}/run`, post()),
 };

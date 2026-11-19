@@ -4,6 +4,7 @@ import json
 from collections.abc import AsyncIterator
 
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -406,3 +407,13 @@ def test_a_plan_that_never_passes_tells_the_user_why(manifest, con):
     assert failed.value.reply().startswith(
         "Sorry, I couldn't do that. Sales by category can't be drawn as a line chart:"
     )
+
+
+def test_a_model_the_provider_refuses_is_named_in_the_reply(manifest, con):
+    def refuse(messages, info):
+        raise ModelHTTPError(400, "nobody/no-such-model", {"message": "not valid"})
+
+    with pytest.raises(llm.ModelFailed) as failed:
+        llm.plan(FunctionModel(refuse), "sales?", manifest, con, Workspace(), [])
+    assert failed.value.unavailable == "nobody/no-such-model"
+    assert "nobody/no-such-model could not be used" in failed.value.reply()
