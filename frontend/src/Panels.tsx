@@ -491,8 +491,14 @@ export function Feed(props: {
         )}
       </form>
       {props.running && (
-        <button type="button" onClick={props.onSettings} title="Change what this chat runs on" className="cursor-pointer truncate px-4 pb-2 text-left text-xs text-ink-faint hover:text-ink">
-          {props.running}
+        <button
+          type="button"
+          onClick={props.onSettings}
+          title="Change the models and voice for this chat"
+          className="flex min-w-0 cursor-pointer items-center gap-1.5 px-4 pb-2 text-left text-xs text-ink-faint hover:text-ink"
+        >
+          <span className="truncate">{props.running}</span>
+          <span className="shrink-0 rounded border border-line-strong px-1.5 text-ink-muted">Change</span>
         </button>
       )}
     </section>

@@ -5,11 +5,12 @@ import { api, type ModelInfo, type Settings, type SettingsInfo, type Voices, typ
 export const short = (model: string) => model.slice(model.indexOf("/") + 1);
 
 /** One line saying what a chat runs on, for the button that opens its settings. */
-export function summary(settings: Settings): string {
+export function summary(settings: Settings, mode: "chat" | "voice" = "chat"): string {
   const effort = (value: string | null) => (value ? ` (${value})` : "");
   const parts = [`${short(settings.model)}${effort(settings.effort)}`];
   if (settings.reply_model) parts.push(`replies: ${short(settings.reply_model)}${effort(settings.reply_effort)}`);
   if (!settings.router) parts.push("fast path off");
+  if (mode === "voice") parts.push(settings.voice.speak ? `spoken at ${settings.voice.speed.toFixed(2)}×` : "replies not spoken");
   return parts.join(" · ");
 }
 
@@ -23,8 +24,12 @@ export function SettingsPanel(props: {
   models: ModelInfo[];
   /** The voices to choose from; null until they have loaded. */
   voices: Voices | null;
-  /** The open chat's title; null when editing the defaults. */
+  /** The chat these settings are for, by title; null when editing the defaults. */
   chat: string | null;
+  /** Where the panel sits: mid-screen, or just above the question box it was opened from. */
+  anchor?: "center" | "bar";
+  /** Put the voice settings first, as when opened in voice mode. */
+  voiceFirst?: boolean;
   onSave: (settings: Settings, asDefault: boolean) => void;
   onClose: () => void;
 }) {
@@ -44,12 +49,15 @@ export function SettingsPanel(props: {
   }, [props.onClose]);
 
   return (
-    <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 p-4" onClick={props.onClose}>
+    <div
+      className={`fixed inset-0 z-20 flex p-4 ${props.anchor === "bar" ? "items-end justify-start pb-24 pl-[256px]" : "items-center justify-center bg-black/60"}`}
+      onClick={props.onClose}
+    >
       <form
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
-        className="flex max-h-full w-full max-w-lg flex-col rounded-lg border border-line-strong bg-surface shadow-xl"
+        className={`flex max-h-full w-full flex-col rounded-lg border border-line-strong bg-surface shadow-xl ${props.anchor === "bar" ? "max-w-md shadow-black/60" : "max-w-lg"}`}
         onClick={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault();
@@ -58,9 +66,9 @@ export function SettingsPanel(props: {
       >
         <header className="flex items-baseline justify-between border-b border-line px-5 py-4">
           <div>
-            <h2 className="text-base font-semibold text-ink-strong">Settings</h2>
+            <h2 className="text-base font-semibold text-ink-strong">{props.chat === null ? "Settings" : "This chat"}</h2>
             <p className="mt-0.5 text-xs text-ink-faint">
-              {props.chat === null ? "Defaults for new chats" : `For this chat: ${props.chat}`}
+              {props.chat === null ? "What new chats start with. Chats you already have keep their own." : props.chat}
             </p>
           </div>
           <button type="button" onClick={props.onClose} aria-label="Close settings" className="cursor-pointer px-1 text-lg text-ink-faint hover:text-ink-strong">
@@ -68,7 +76,7 @@ export function SettingsPanel(props: {
           </button>
         </header>
 
-        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-5 py-4">
           <Section title="Planning" hint="Turns what you ask into queries and charts.">
             <ModelField label="Model" value={draft.model} models={props.models} onChange={(model) => set({ model })} />
             <EffortField value={draft.effort} efforts={props.info.efforts} onChange={(effort) => set({ effort })} />
@@ -99,6 +107,7 @@ export function SettingsPanel(props: {
           </Section>
 
           <Section
+            first={props.voiceFirst}
             title="Voice"
             hint={hasSpeech ? "Used in voice mode: hold the space bar to talk, and replies are read aloud." : "Voice mode needs ELEVENLABS_API_KEY set where talkviz runs."}
           >
@@ -144,12 +153,14 @@ export function SettingsPanel(props: {
             </details>
           </Section>
 
-          <Section title="API keys" hint="Read from the environment where talkviz runs; they are never shown or set here.">
-            <ul className="space-y-1 text-sm">
-              <Key name="OpenRouter" variable="OPENROUTER_API_KEY" set={props.info.keys.openrouter ?? false} />
-              <Key name="ElevenLabs" variable="ELEVENLABS_API_KEY" set={props.info.keys.elevenlabs ?? false} />
-            </ul>
-          </Section>
+          {props.chat === null && (
+            <Section title="API keys" hint="Read from the environment where talkviz runs; they are never shown or set here.">
+              <ul className="space-y-1 text-sm">
+                <Key name="OpenRouter" variable="OPENROUTER_API_KEY" set={props.info.keys.openrouter ?? false} />
+                <Key name="ElevenLabs" variable="ELEVENLABS_API_KEY" set={props.info.keys.elevenlabs ?? false} />
+              </ul>
+            </Section>
+          )}
         </div>
 
         <footer className="flex items-center justify-between gap-3 border-t border-line px-5 py-3">
@@ -179,9 +190,9 @@ export function SettingsPanel(props: {
   );
 }
 
-function Section(props: { title: string; hint: string; children: React.ReactNode }) {
+function Section(props: { title: string; hint: string; first?: boolean; children: React.ReactNode }) {
   return (
-    <section>
+    <section className={props.first ? "order-first" : undefined}>
       <h3 className="text-sm font-medium text-ink-strong">{props.title}</h3>
       <p className="mt-0.5 mb-3 text-xs text-ink-faint">{props.hint}</p>
       <div className="space-y-3">{props.children}</div>

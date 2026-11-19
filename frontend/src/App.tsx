@@ -23,7 +23,10 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<SettingsInfo | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Which settings are open: the defaults for new chats, or this chat's own.
+  const [settingsOpen, setSettingsOpen] = useState<"defaults" | "chat" | null>(null);
+  // Settings chosen for a chat that has not been started yet.
+  const [draft, setDraft] = useState<Settings | null>(null);
   const [voices, setVoices] = useState<Voices | null>(null);
   const [mode, setMode] = useState<"chat" | "voice">(recalled);
   // The reply being read aloud, if one is.
@@ -81,6 +84,7 @@ export function App() {
     setView(null);
     setShown([]);
     setError(null);
+    setDraft(null);
   };
 
   const say = async (text: string) => {
@@ -88,8 +92,11 @@ export function App() {
     setPending(text);
     try {
       const chat = view?.chat ?? (await api.newChat());
-      const current = view ?? { chat, settings: info?.defaults ?? (await api.chat(chat.id)).settings, charts: [], events: [], shown: [] };
+      // A new chat takes the settings chosen for it before it existed, if any.
+      const own = view ? null : draft && (await api.saveSettings(chat.id, draft));
+      const current = view ?? { chat, settings: own ?? info?.defaults ?? (await api.chat(chat.id)).settings, charts: [], events: [], shown: [] };
       if (!view) setView(current);
+      setDraft(null);
       const turn = await api.say(chat.id, text);
       const changed = new Map(turn.charts.map((c) => [c.id, c]));
       setView({
@@ -156,12 +163,16 @@ export function App() {
     api.resetLens(view.chat.id, chartId).catch(fail);
   };
 
-  // Saves the open chat's settings, or with no chat open, the defaults.
+  // Saves this chat's settings or the defaults, whichever panel was open. A
+  // chat not yet started keeps its settings here until its first message.
   const saveSettings = (settings: Settings, asDefault: boolean) => {
-    setSettingsOpen(false);
-    if (view) {
+    const scope = settingsOpen;
+    setSettingsOpen(null);
+    if (scope === "chat" && view) {
       setView((v) => v && { ...v, settings });
       api.saveSettings(view.chat.id, settings).catch(fail);
+    } else if (scope === "chat") {
+      setDraft(settings);
     }
     if (asDefault) {
       setInfo((i) => i && { ...i, defaults: settings });
@@ -181,25 +192,30 @@ export function App() {
 
   const source = sources.find((s) => s.name === view?.chat.source) ?? sources[0];
   const charts = shown.flatMap((id) => view?.charts.find((c) => c.id === id) ?? []);
-  const settings = view?.settings ?? info?.defaults;
+  const settings = view?.settings ?? draft ?? info?.defaults;
 
   return (
     <div className="grid h-full grid-cols-[240px_minmax(0,1fr)_260px]">
-      <Sidebar chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} onSettings={() => setSettingsOpen(true)} />
+      <Sidebar chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} onSettings={() => setSettingsOpen("defaults")} />
       <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_minmax(180px,32%)]">
         <Workspace charts={charts} all={view?.charts ?? []} source={source} busy={pending !== null} onAsk={say} onDraw={draw} onReset={reset} onClose={toggle} />
-        <Feed events={view?.events ?? []} pending={pending} error={error} running={settings ? summary(settings) : null} mode={mode} chatId={view?.chat.id ?? null} onMode={choose} onInterrupt={hush} onError={setError} onSay={say} onFocus={show} onSettings={() => setSettingsOpen(true)} />
+        <Feed events={view?.events ?? []} pending={pending} error={error} running={settings ? summary(settings, mode) : null} mode={mode} chatId={view?.chat.id ?? null} onMode={choose} onInterrupt={hush} onError={setError} onSay={say} onFocus={show} onSettings={() => setSettingsOpen("chat")} />
       </main>
       <ChartList charts={view?.charts ?? []} shown={shown} full={shown.length >= MAX_SHOWN} onFocus={show} onToggle={toggle} />
-      {settingsOpen && settings && info && (
+      {settingsOpen === "defaults" && info && (
+        <SettingsPanel settings={info.defaults} info={info} models={models} voices={voices} chat={null} onSave={saveSettings} onClose={() => setSettingsOpen(null)} />
+      )}
+      {settingsOpen === "chat" && settings && info && (
         <SettingsPanel
           settings={settings}
           info={info}
           models={models}
           voices={voices}
-          chat={view ? view.chat.title : null}
+          chat={view?.chat.title ?? "New chat"}
+          anchor="bar"
+          voiceFirst={mode === "voice"}
           onSave={saveSettings}
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => setSettingsOpen(null)}
         />
       )}
     </div>

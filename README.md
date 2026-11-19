@@ -61,8 +61,9 @@ its view, and a Reset link under the title undoes them.
 Each chat keeps its own settings: the model that plans, the model that writes
 replies, each one's reasoning effort, and whether the fast path is used. A
 new chat copies the defaults, which start from the environment variables
-above and can be changed in the app (Settings, bottom left, or the line under
-the question box). Any OpenRouter model id can be used. Every reply shows
+above and can be changed in the app: Settings, bottom left, edits the defaults, and
+the line under the question box edits just the open chat (before a new
+chat's first message too). Any OpenRouter model id can be used. Every reply shows
 which models produced it and how long it took, so chats run on different
 models can be compared. API keys are read from the environment only; the app
 shows whether each is set, never its value.
