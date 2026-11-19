@@ -67,6 +67,19 @@ which models produced it and how long it took, so chats run on different
 models can be compared. API keys are read from the environment only; the app
 shows whether each is set, never its value.
 
+### Voice mode
+
+Switch the question box from Chat to Voice, then hold the space bar and talk;
+let go to send. The box shows your voice as you speak. Replies are read
+aloud, and talking again cuts a reply short. It needs `ELEVENLABS_API_KEY`
+set where talkviz runs, with access to speech to text and text to speech.
+Audio goes from the browser to the talkviz server and from there to
+ElevenLabs, so the key never reaches the browser.
+
+The voice, speaking speed, language and speech models are part of each
+chat's settings. If the key may not list voices, a few built-in ones are
+offered.
+
 ### Asking about a chart
 
 A follow-up like "what does this reveal", "which make was highest in 2020",

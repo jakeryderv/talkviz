@@ -4,6 +4,7 @@ import { ChartBody, figure } from "./charts/ChartBody";
 import { date, number, slug } from "./charts/format";
 import { seriesOf, titled } from "./charts/plot";
 import { short } from "./Settings";
+import { VoiceBar } from "./Voice";
 
 const BARS = [
   [51, 112, 32],
@@ -395,6 +396,12 @@ export function Feed(props: {
   error: string | null;
   /** What the chat runs on, in a line; opens the settings when clicked. */
   running: string | null;
+  /** Typing, or talking with the space bar held. */
+  mode: "chat" | "voice";
+  chatId: string | null;
+  onMode: (mode: "chat" | "voice") => void;
+  onInterrupt: () => void;
+  onError: (message: string) => void;
   onSay: (text: string) => void;
   onFocus: (chartId: string) => void;
   onSettings: () => void;
@@ -448,6 +455,23 @@ export function Feed(props: {
           submit();
         }}
       >
+        <div role="group" aria-label="How to ask" className="flex shrink-0 rounded-md border border-line-strong p-0.5 text-sm">
+          {(["chat", "voice"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              aria-pressed={props.mode === mode}
+              onClick={() => props.onMode(mode)}
+              className={`cursor-pointer rounded px-2.5 capitalize ${props.mode === mode ? "bg-raised text-ink-strong" : "text-ink-muted hover:text-ink"}`}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+        {props.mode === "voice" ? (
+          <VoiceBar chatId={props.chatId} busy={busy} onInterrupt={props.onInterrupt} onSay={props.onSay} onError={props.onError} />
+        ) : (
+          <>
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -463,6 +487,8 @@ export function Feed(props: {
         >
           Ask
         </button>
+          </>
+        )}
       </form>
       {props.running && (
         <button type="button" onClick={props.onSettings} title="Change what this chat runs on" className="cursor-pointer truncate px-4 pb-2 text-left text-xs text-ink-faint hover:text-ink">

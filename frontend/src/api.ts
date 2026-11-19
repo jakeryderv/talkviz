@@ -85,7 +85,23 @@ export type Settings = {
   reply_model: string | null;
   reply_effort: string | null;
   router: boolean;
+  voice: VoiceSettings;
 };
+/** How a chat listens and speaks in voice mode. */
+export type VoiceSettings = {
+  listen_model: string;
+  /** ISO 639 code of the language spoken; null detects it. */
+  language: string | null;
+  /** Read replies aloud. */
+  speak: boolean;
+  /** Null uses a built-in default voice. */
+  voice_id: string | null;
+  speak_model: string;
+  /** 0.7 to 1.2. */
+  speed: number;
+};
+export type Voice = { id: string; name: string; description: string; preview_url: string | null };
+export type Voices = { voices: Voice[]; note: string | null };
 export type SettingsInfo = { defaults: Settings; efforts: string[]; keys: Record<string, boolean> };
 export type ModelInfo = { id: string; name: string };
 
@@ -103,7 +119,7 @@ export type Source = {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
-    headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+    headers: init?.headers ?? (init?.body ? { "Content-Type": "application/json" } : undefined),
   });
   if (!response.ok) {
     let detail = response.statusText;
@@ -139,6 +155,13 @@ export const api = {
     }),
   resetLens: (id: string, chartId: string) =>
     request<void>(`/api/chats/${id}/charts/${chartId}/lens`, { method: "DELETE" }),
+  voices: () => request<Voices>("/api/voices"),
+  /** The words in a recording. The audio goes to the talkviz server, which holds the speech key. */
+  transcribe: (audio: Blob, chatId: string | null) =>
+    request<{ text: string }>(`/api/transcribe${chatId ? `?chat=${chatId}` : ""}`, { method: "POST", body: audio, headers: { "Content-Type": audio.type || "audio/webm" } }),
+  /** Where a reply can be heard, read aloud in the chat's voice. */
+  replyAudio: (id: string, eventId: number) => `/api/chats/${id}/events/${eventId}/audio`,
+  voiceSample: (voiceId: string, speed: number) => `/api/voices/${encodeURIComponent(voiceId)}/sample?speed=${speed}`,
   settings: () => request<SettingsInfo>("/api/settings"),
   models: () => request<ModelInfo[]>("/api/models"),
   saveDefaults: (settings: Settings) => request<Settings>("/api/settings", put(settings)),

@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, type Chart, type Chat, type ChatView, type Kind, type ModelInfo, type Settings, type SettingsInfo, type Source } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type Chart, type Chat, type ChatView, type Kind, type ModelInfo, type Settings, type SettingsInfo, type Source, type Voices } from "./api";
 import { ChartList, Feed, Sidebar, Workspace } from "./Panels";
 import { SettingsPanel, summary } from "./Settings";
 
 const MAX_SHOWN = 4;
+
+function recalled(): "chat" | "voice" {
+  try {
+    return localStorage.getItem("talkviz.mode") === "voice" ? "voice" : "chat";
+  } catch {
+    return "chat";
+  }
+}
 
 export function App() {
   const [sources, setSources] = useState<Source[]>([]);
@@ -16,6 +24,23 @@ export function App() {
   const [info, setInfo] = useState<SettingsInfo | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [voices, setVoices] = useState<Voices | null>(null);
+  const [mode, setMode] = useState<"chat" | "voice">(recalled);
+  // The reply being read aloud, if one is.
+  const speaking = useRef<HTMLAudioElement | null>(null);
+  const hush = () => {
+    speaking.current?.pause();
+    speaking.current = null;
+  };
+  const choose = (next: "chat" | "voice") => {
+    setMode(next);
+    if (next === "chat") hush();
+    try {
+      localStorage.setItem("talkviz.mode", next);
+    } catch {
+      // Not remembered; nothing else depends on it.
+    }
+  };
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
 
@@ -27,7 +52,8 @@ export function App() {
   // The model list is long and only the settings panel needs it.
   useEffect(() => {
     if (settingsOpen && models.length === 0) api.models().then(setModels).catch(() => {});
-  }, [settingsOpen, models.length]);
+    if (settingsOpen && !voices) api.voices().then(setVoices).catch(() => {});
+  }, [settingsOpen, models.length, voices]);
 
   const open = useCallback((id: string, chartIds?: string[]) => {
     setError(null);
@@ -77,6 +103,14 @@ export function App() {
         shown: turn.shown.length ? turn.shown : current.shown,
       });
       if (turn.shown.length) setShown(turn.shown);
+      // In voice mode the reply is read aloud, in the chat's voice.
+      const reply = turn.events.findLast((e) => e.kind === "assistant" && e.text);
+      if (mode === "voice" && reply && current.settings.voice.speak) {
+        hush();
+        const audio = new Audio(api.replyAudio(chat.id, reply.id));
+        speaking.current = audio;
+        audio.play().catch(() => speaking.current === audio && fail("The reply could not be read aloud. Check the voice in this chat's settings."));
+      }
       setChats((all) => [turn.chat, ...all.filter((c) => c.id !== turn.chat.id)]);
     } catch (e) {
       fail(e);
@@ -154,7 +188,7 @@ export function App() {
       <Sidebar chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} onSettings={() => setSettingsOpen(true)} />
       <main className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_minmax(180px,32%)]">
         <Workspace charts={charts} all={view?.charts ?? []} source={source} busy={pending !== null} onAsk={say} onDraw={draw} onReset={reset} onClose={toggle} />
-        <Feed events={view?.events ?? []} pending={pending} error={error} running={settings ? summary(settings) : null} onSay={say} onFocus={show} onSettings={() => setSettingsOpen(true)} />
+        <Feed events={view?.events ?? []} pending={pending} error={error} running={settings ? summary(settings) : null} mode={mode} chatId={view?.chat.id ?? null} onMode={choose} onInterrupt={hush} onError={setError} onSay={say} onFocus={show} onSettings={() => setSettingsOpen(true)} />
       </main>
       <ChartList charts={view?.charts ?? []} shown={shown} full={shown.length >= MAX_SHOWN} onFocus={show} onToggle={toggle} />
       {settingsOpen && settings && info && (
@@ -162,6 +196,7 @@ export function App() {
           settings={settings}
           info={info}
           models={models}
+          voices={voices}
           chat={view ? view.chat.title : null}
           onSave={saveSettings}
           onClose={() => setSettingsOpen(false)}
