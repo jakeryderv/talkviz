@@ -33,11 +33,18 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from talkviz.charts import check_spec
+from talkviz.charts import KIND_NAMES, check_spec, views, why_not
 from talkviz.manifest import Manifest
 from talkviz.speech import numbers_in, unsupported_numbers
 from talkviz.sql import QueryRejected, QueryResult, check_and_run
-from talkviz.workspace import Action, Chart, CreateChart, Workspace
+from talkviz.workspace import (
+    Action,
+    Chart,
+    CreateChart,
+    SetView,
+    UpdateChart,
+    Workspace,
+)
 
 Effort = Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
 EFFORTS: tuple[str, ...] = get_args(Effort)
@@ -105,6 +112,17 @@ def _openrouter(name: str, effort: str | None) -> Model:
 class ModelFailed(Exception):
     """The model call failed, or it never returned a plan that passed validation."""
 
+    def __init__(self, message: str, problems: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.problems = problems or []
+        """What was wrong with the last plan, if it got as far as returning one."""
+
+    def reply(self) -> str:
+        """What to tell the user."""
+        if not self.problems:
+            return "Sorry, I couldn't work that out. Try asking another way."
+        return f"Sorry, I couldn't do that. {self.problems[0]}"
+
 
 class Plan(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -142,6 +160,11 @@ class PlanDeps:
     con: duckdb.DuckDBPyConnection
     workspace: Workspace
     runs: list[ChartRun] = field(default_factory=list)
+    wanted: dict[str, str] = field(default_factory=dict)
+    """Chart id to the kind the plan first asked to draw it as, for requests
+    that did not fit. Later attempts may not quietly settle for another kind."""
+    problems: list[str] = field(default_factory=list)
+    """Why the latest plan was sent back, in words the user could be told."""
 
 
 @dataclass
@@ -182,7 +205,7 @@ def plan(
     try:
         result = agent.run_sync(_plan_prompt(question, workspace, history), deps=deps)
     except AgentRunError as error:
-        raise ModelFailed(str(error)) from error
+        raise ModelFailed(str(error), deps.problems) from error
     return Planned(result.output, deps.runs, result.all_messages_json())
 
 
@@ -254,7 +277,7 @@ def speak_stream(
 
 def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
     deps = ctx.deps
-    problems = []
+    problems, told = [], []
     if not output.actions and not output.note:
         problems.append("Give at least one action, or a note saying why there is none.")
     if len(output.actions) > MAX_ACTIONS:
@@ -285,7 +308,43 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
             problems.append(f"{where}: query rejected: {rejected}")
             continue
         problems.extend(f"{where}: {p}" for p in check_spec(chart.spec, result))
-        runs.append(ChartRun(chart, result, action.op))
+        op = action.op
+        current = deps.workspace.get(chart.id)
+        asked = deps.wanted.get(chart.id)
+        if asked and chart.shown != asked:
+            problems.append(
+                f"{where}: you first asked to draw {chart.title!r} as {asked!r}"
+                f" and are now drawing it as {chart.shown!r}. Draw it as"
+                f" {asked!r}, or return no actions and a note saying why not."
+            )
+        if isinstance(action, SetView):
+            fits = [view.kind for view in views(chart.spec, result)]
+            if action.kind not in fits:
+                deps.wanted[chart.id] = action.kind
+                name = KIND_NAMES.get(action.kind, action.kind)
+                reason = why_not(chart.spec, action.kind, result)
+                told.append(f"{chart.title} can't be drawn as {name}: {reason}")
+                # Say what is wrong, not what else would fit: offered the
+                # alternatives, the model picks one the user did not ask for.
+                problems.append(
+                    f"{where}: the result of {chart.title!r} cannot be drawn as"
+                    f" {action.kind!r}: {reason}"
+                    f" The user asked for {action.kind!r}, so do not draw it as"
+                    " another kind. Use update_chart on this chart instead, with"
+                    f" a {action.kind!r} spec and a query changed so that it"
+                    " fits. If no query could, return no actions and a note"
+                    " telling the user why it cannot be done."
+                )
+        elif (
+            isinstance(action, UpdateChart)
+            and current is not None
+            and (chart.sql, chart.title) == (current.sql, current.title)
+            and chart.spec in views(current.spec, result)
+        ):
+            # Only how the same result is drawn changed: a view, not a revision.
+            chart, op = current.model_copy(update={"view": chart.spec.kind}), "set_view"
+        runs.append(ChartRun(chart, result, op))
+    deps.problems = told
     if problems:
         raise ModelRetry("Fix these problems and answer again:\n" + "\n".join(problems))
     deps.runs = runs
@@ -386,17 +445,35 @@ writes the spoken reply from your charts' results, so you only plan charts.
 
 # Charts
 
+Pick the kind that answers the question most plainly. The user can switch a
+chart between the other kinds its result fits, so do not make a second chart
+only to show the same result another way.
+
 - stat: one headline number, from a query returning one row.
-- line: a number over time or another ordered axis.
-- bar: a number compared across categories.
+- line: a number over time or another ordered axis. area: the same, filled,
+  with `series` stacked to show a total and its make-up.
+- bar: a number compared across categories. stacked_bar: each bar split by
+  `series`, when the total matters as well as the parts.
+- donut: shares of a whole. treemap: the same when there are many parts. Use
+  these only when the question is about shares; otherwise bar. The smallest
+  parts are grouped as "Other" when there are too many to tell apart.
+- heatmap: a number for every pair of two categories.
+- scatter: how two numbers relate, one point per row; `color` may be a
+  category or a third number. scatter3d: three numbers, only when asked for 3D.
 - table: a listing of records, or anything the others do not fit.
 - `series` splits a bar or line by a second column; keep to a few values.
 
 # Actions
 
 - create_chart for a new question.
-- update_chart when they ask to change a chart they already have ("make that
-  a bar chart", "only since 2015"). Send only the fields that change.
+- update_chart when they ask to change what a chart they already have shows
+  ("only since 2015", "split it by make"). Send only the fields that change.
+- set_view when they only want an existing chart drawn another way ("make
+  that a donut", "show it as a table"). It reuses the chart's result, so it
+  works only for kinds that result fits; you are told if it does not. Never
+  give a different kind from the one they asked for.
+- When something they ask for cannot be done, say so and why in the note. Do
+  not do something else in its place without saying.
 - show_chart when they ask to see an existing chart again.
 - Titles are how the user refers to charts aloud: short, specific, distinct.
 - If the question cannot be answered from this dataset, or is too vague to
@@ -430,7 +507,8 @@ def _plan_prompt(question: str, workspace: Workspace, history: list[Exchange]) -
     if workspace.charts:
         charts = "\n".join(
             f"- {c.id}: {c.title!r} spec={c.spec.model_dump_json(exclude_none=True)}"
-            f"\n  sql: {' '.join(c.sql.split())}"
+            + (f" drawn as {c.view}" if c.view else "")
+            + f"\n  sql: {' '.join(c.sql.split())}"
             for c in workspace.charts
         )
         parts.append("Charts in this chat (the last is the most recent):\n" + charts)
@@ -457,10 +535,29 @@ def _speech_prompt(question: str, planned: Planned, history: list[Exchange]) -> 
             else f"{len(result.rows)} rows"
         )
         parts.append(
-            f"Chart {run.op.removesuffix('_chart')}d: {run.chart.title!r}"
-            f" ({run.chart.spec.kind}, {shown})\n{header}\n{rows}"
+            f"Chart {_DID[run.op]}: {run.chart.title!r}"
+            f" ({run.chart.shown}, {shown})\n{header}\n{rows}"
         )
     return "\n\n".join(parts)
+
+
+_DID = {
+    "create_chart": "created",
+    "update_chart": "updated",
+    "show_chart": "shown",
+    "set_view": "redrawn",
+}
+
+
+def view_reply(runs: list[ChartRun]) -> str | None:
+    """A reply for a turn that only changed how charts are drawn, which needs
+    no model: there is nothing new to say about the data. None otherwise."""
+    if not runs or any(run.op != "set_view" for run in runs):
+        return None
+    return " ".join(
+        f"Here's {run.chart.title} as {KIND_NAMES.get(run.chart.shown, run.chart.shown)}."
+        for run in runs
+    )
 
 
 def _transcript(history: list[Exchange]) -> str:

@@ -19,7 +19,18 @@ export type Run = {
 export type Spec =
   | { kind: "stat"; value: string; label: string }
   | { kind: "table" }
-  | { kind: "bar" | "line"; x: string; y: string; series?: string | null };
+  | { kind: "bar" | "stacked_bar" | "line" | "area"; x: string; y: string; series?: string | null }
+  | { kind: "donut" | "treemap"; label: string; value: string }
+  | { kind: "heatmap"; x: string; y: string; value: string }
+  | {
+      kind: "scatter" | "scatter3d";
+      x: string;
+      y: string;
+      z?: string | null;
+      color?: string | null;
+      label?: string | null;
+    };
+export type Kind = Spec["kind"];
 
 export type Chart = {
   id: string;
@@ -27,7 +38,11 @@ export type Chart = {
   sql: string;
   spec: Spec;
   revision: number;
+  /** The kind it is drawn as, when not the spec's own. Saved with the chart. */
+  view: Kind | null;
   run: Run | null;
+  /** Every way the result can be drawn, the chart's own spec first. */
+  views: Spec[];
 };
 
 export type FeedEvent = {
@@ -84,6 +99,12 @@ export const api = {
   newChat: (source?: string) => request<Chat>("/api/chats", post({ source })),
   deleteChat: (id: string) => request<void>(`/api/chats/${id}`, { method: "DELETE" }),
   say: (id: string, text: string) => request<TurnView>(`/api/chats/${id}/turns`, post({ text })),
+  setView: (id: string, chartId: string, kind: Kind) =>
+    request<Chart>(`/api/chats/${id}/charts/${chartId}/view`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind }),
+    }),
   rerun: (id: string, chartId: string) =>
     request<Chart>(`/api/chats/${id}/charts/${chartId}/run`, post()),
 };
