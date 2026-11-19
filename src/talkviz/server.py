@@ -124,6 +124,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
         return app.state.store
 
     app.state.jev = None  # the router, made on first use
+    app.state.stages = {}  # chat id -> the stage its turn in progress has reached
     app.state.catalog = (0.0, [])  # when OpenRouter's models were listed, and they
 
     def defaults() -> Settings:
@@ -277,6 +278,11 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
     def delete(chat: Current, store: Stored) -> None:
         store.delete_chat(chat.id)
 
+    @app.get("/api/chats/{chat_id}/progress")
+    def progress(chat: Current) -> dict[str, str | None]:
+        """The stage the chat's turn in progress has reached, if one is running."""
+        return {"stage": app.state.stages.get(chat.id)}
+
     @app.post("/api/chats/{chat_id}/turns")
     def turn(
         body: Say,
@@ -293,6 +299,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
             chat = chat.model_copy(update={"title": _title(body.text)})
             store.rename_chat(chat.id, chat.title)
         touched: list[Chart] = []
+        stages = app.state.stages
         try:
             with source.connect() as con:
                 version = source.data_version(con)
@@ -307,6 +314,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     router=router,
                     focus=(_shown(history) or [None])[-1],
                     seen=_seen(_views(store, chat.id, workspace.charts)),
+                    stage=lambda name: stages.__setitem__(chat.id, name),
                 )
         except llm.ModelFailed as error:
             reply = error.reply()
@@ -316,6 +324,13 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                 )
             )
             return TurnView(chat=chat, events=events, charts=[], shown=[])
+        finally:
+            stages.pop(chat.id, None)
+        # A new chat is named after its first chart, which says what it is
+        # about in fewer words than the question did.
+        if not history and taken.runs:
+            chat = chat.model_copy(update={"title": _title(taken.runs[0].chart.title)})
+            store.rename_chat(chat.id, chat.title)
         for run in taken.runs:
             store.save_chart(chat.id, run.chart)
             saved = store.save_run(chat.id, run.chart, run.result, version)

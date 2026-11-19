@@ -31,7 +31,8 @@ def test_a_turn_adds_a_chart_its_result_and_the_feed(source):
     )
     assert turn.status_code == 200, turn.text
     turn = turn.json()
-    assert turn["chat"]["title"] == "sales by category?"
+    # Named after its first chart, not the question.
+    assert turn["chat"]["title"] == "Sales by category"
     assert [e["kind"] for e in turn["events"]] == ["user", "chart", "assistant"]
     assert turn["events"][1]["op"] == "create_chart"
     assert turn["shown"] == ["c1"]
@@ -79,7 +80,7 @@ def test_a_chat_is_restored_with_charts_results_and_feed(source):
     assert view["events"][-1]["text"] == "Here's Sales by category as a table."
     assert view["shown"] == ["c1"]
     assert [e["kind"] for e in view["events"]] == ["user", "chart", "assistant"] * 3
-    assert [c["title"] for c in app.get("/api/chats").json()] == ["sales by category?"]
+    assert [c["title"] for c in app.get("/api/chats").json()] == ["Sales by category"]
 
 
 def test_later_turns_are_told_the_conversation_and_charts_so_far(source):
@@ -281,3 +282,10 @@ def test_a_reply_records_the_models_and_time_behind_it(source):
     reply = turn["events"][-1]
     assert reply["models"] == {"plan": "some/planner", "reply": "some/replier"}
     assert set(reply["seconds"]) == {"route", "plan", "speak"}
+
+
+def test_progress_is_empty_when_no_turn_is_running(source):
+    app = client({"actions": [create()]}, "Games lead at 105.")
+    chat = app.post("/api/chats", json={}).json()
+    app.post(f"/api/chats/{chat['id']}/turns", json={"text": "sales by category?"})
+    assert app.get(f"/api/chats/{chat['id']}/progress").json() == {"stage": None}
