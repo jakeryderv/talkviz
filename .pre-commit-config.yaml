@@ -1,0 +1,43 @@
+# Hooks run the project's own tools through uv, so they use the versions in
+# uv.lock: the same ones CI uses.
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+      - id: ty
+        name: ty check
+        entry: uv run ty check
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+      - id: uv-lock
+        name: uv.lock is up to date
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      # Releases and the changelog are generated from commit messages.
+      - id: conventional-commit
+        name: conventional commit message
+        entry: '\A(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([\w./-]+\))?!?: \S'
+        language: pygrep
+        args: [--negate]
+        stages: [commit-msg]
