@@ -42,6 +42,14 @@ about 2 to 3 seconds.
 | `TALKVIZ_EFFORT` | `--effort` | Its reasoning effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `TALKVIZ_SPEECH_MODEL` | `--speech-model` | Reply model |
 | `TALKVIZ_SPEECH_EFFORT` | `--speech-effort` | Its reasoning effort |
+| `TALKVIZ_ROUTER` | | Router model for the web app, or `off` (default `typesafe/jev-1.14`) |
+
+In the web app, a small decision model looks at each message first. When it
+is confident the message only asks to redraw a chart ("make that a donut") or
+bring one back ("show the first chart again"), talkviz does that directly in
+about a quarter of a second, without the planning or reply models. Everything
+else, and any doubt or error, goes to the planner as usual. It uses
+OpenRouter's Decisions API, which is in alpha.
 
 A model you choose runs at its own default effort unless you set one.
 

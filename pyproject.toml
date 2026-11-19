@@ -12,6 +12,7 @@ requires-python = ">=3.12"
 dependencies = [
     "duckdb>=2.0.0",
     "fastapi>=0.165.0",
+    "httpx>=0.28",
     "platformdirs>=4.14.7",
     "pydantic>=2.14.3",
     "pydantic-ai-slim[openrouter]>=2.71.0",
