@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from talkviz import llm
+from talkviz import llm, route
 from talkviz.charts import ChartSpec, views
 from talkviz.llm import Exchange, Model
 from talkviz.sources import Source, list_sources, load_source
@@ -81,6 +81,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
     app = FastAPI(title="talkviz")
     app.state.model = model
     app.state.speaker = None  # a separate model for replies, if one is configured
+    app.state.router = None  # a fast first look at each message, if configured
     app.state.store = store or Store()
 
     def get_store() -> Store:
@@ -91,6 +92,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
             try:
                 app.state.model = llm.openrouter()
                 app.state.speaker = llm.speech_openrouter()
+                app.state.router = route.jev()
             except Exception as error:  # whatever the provider raises
                 raise HTTPException(503, f"No model available: {error}") from error
         return app.state.model
@@ -165,6 +167,9 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     workspace,
                     _exchanges(history),
                     speaker=app.state.speaker,
+                    router=app.state.router,
+                    focus=_focus(history),
+                    seen=_seen(_views(store, chat.id, workspace.charts)),
                 )
         except llm.ModelFailed as error:
             reply = error.reply()
@@ -277,6 +282,17 @@ def _view(chart: Chart, run: Run | None) -> ChartView:
         seconds=run.seconds,
     )
     return ChartView(**chart.model_dump(), run=run, views=views(chart.spec, result))
+
+
+def _seen(charts: list[ChartView]) -> dict[str, route.Seen]:
+    return {
+        chart.id: route.Seen(
+            columns=[column.name for column in chart.run.columns],
+            views=[view.kind for view in chart.views[1:]],
+        )
+        for chart in charts
+        if chart.run is not None
+    }
 
 
 def _focus(events: list[Event]) -> str | None:

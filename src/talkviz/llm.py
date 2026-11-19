@@ -191,9 +191,25 @@ def plan(
     con: duckdb.DuckDBPyConnection,
     workspace: Workspace,
     history: list[Exchange],
+    misfit: tuple[Chart, str, str] | None = None,
 ) -> Planned:
-    """Ask the model for chart actions; all returned actions have been run."""
+    """Ask the model for chart actions; all returned actions have been run.
+
+    `misfit` is a view already known not to fit: the chart, the kind asked
+    for, and why not. The model is told, which saves it finding out.
+    """
     deps = PlanDeps(manifest, con, workspace)
+    hint = None
+    if misfit:
+        chart, kind, reason = misfit
+        deps.wanted[chart.id] = kind
+        hint = (
+            f"They are asking to draw {chart.id} ({chart.title!r}) as {kind!r}."
+            f" Its result cannot be drawn that way: {reason} So set_view will"
+            f" not work. Either use update_chart with a {kind!r} spec and a query"
+            " changed so that it fits, or, if that would not be what they"
+            " asked for, return no actions and a note telling them why."
+        )
     agent = Agent(
         model,
         output_type=PromptedOutput(Plan),
@@ -203,7 +219,9 @@ def plan(
     )
     agent.output_validator(_validate_plan)
     try:
-        result = agent.run_sync(_plan_prompt(question, workspace, history), deps=deps)
+        result = agent.run_sync(
+            _plan_prompt(question, workspace, history, hint), deps=deps
+        )
     except AgentRunError as error:
         raise ModelFailed(str(error), deps.problems) from error
     return Planned(result.output, deps.runs, result.all_messages_json())
@@ -342,7 +360,8 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
             and chart.spec in views(current.spec, result)
         ):
             # Only how the same result is drawn changed: a view, not a revision.
-            chart, op = current.model_copy(update={"view": chart.spec.kind}), "set_view"
+            view = None if chart.spec.kind == current.spec.kind else chart.spec.kind
+            chart, op = current.model_copy(update={"view": view}), "set_view"
         runs.append(ChartRun(chart, result, op))
     deps.problems = told
     if problems:
@@ -500,7 +519,9 @@ charts.
 """
 
 
-def _plan_prompt(question: str, workspace: Workspace, history: list[Exchange]) -> str:
+def _plan_prompt(
+    question: str, workspace: Workspace, history: list[Exchange], hint: str | None
+) -> str:
     parts = []
     if history:
         parts.append("Conversation so far:\n" + _transcript(history))
@@ -513,6 +534,8 @@ def _plan_prompt(question: str, workspace: Workspace, history: list[Exchange]) -
         )
         parts.append("Charts in this chat (the last is the most recent):\n" + charts)
     parts.append(f"The user says: {question}")
+    if hint:
+        parts.append(hint)
     return "\n\n".join(parts)
 
 
@@ -550,12 +573,15 @@ _DID = {
 
 
 def view_reply(runs: list[ChartRun]) -> str | None:
-    """A reply for a turn that only changed how charts are drawn, which needs
-    no model: there is nothing new to say about the data. None otherwise."""
-    if not runs or any(run.op != "set_view" for run in runs):
+    """A reply for a turn that only redrew charts or brought them back, which
+    needs no model: there is nothing new to say about the data. None otherwise."""
+    if not runs or any(run.op not in ("set_view", "show_chart") for run in runs):
         return None
     return " ".join(
-        f"Here's {run.chart.title} as {KIND_NAMES.get(run.chart.shown, run.chart.shown)}."
+        f"Here's {run.chart.title} again."
+        if run.op == "show_chart"
+        else f"Here's {run.chart.title} as"
+        f" {KIND_NAMES.get(run.chart.shown, run.chart.shown)}."
         for run in runs
     )
 

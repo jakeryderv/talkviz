@@ -93,7 +93,9 @@ class Workspace(BaseModel):
         if isinstance(action, ShowChart):
             return current
         if isinstance(action, SetView):
-            return current.model_copy(update={"view": action.kind})
+            # The spec's own kind is the default, stored as no view.
+            view = None if action.kind == current.spec.kind else action.kind
+            return current.model_copy(update={"view": view})
         changes = action.model_dump(exclude={"op", "chart_id"}, exclude_none=True)
         if not changes:
             return current

@@ -841,6 +841,7 @@ source = { editable = "." }
 dependencies = [
     { name = "duckdb" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "platformdirs" },
     { name = "pydantic" },
     { name = "pydantic-ai-slim", extra = ["openrouter"] },
@@ -863,6 +864,7 @@ dev = [
 requires-dist = [
     { name = "duckdb", specifier = ">=2.0.0" },
     { name = "fastapi", specifier = ">=0.165.0" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "platformdirs", specifier = ">=4.14.7" },
     { name = "pydantic", specifier = ">=2.14.3" },
     { name = "pydantic-ai-slim", extras = ["openrouter"], specifier = ">=2.71.0" },
