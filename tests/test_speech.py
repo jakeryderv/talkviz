@@ -38,3 +38,13 @@ def test_small_whole_numbers_always_pass():
     assert unsupported_numbers("The top 5 makes, and 3 stand out.", set()) == []
     assert unsupported_numbers("There were 11 of them.", set()) == ["11"]
     assert unsupported_numbers("It was 2.5 times higher.", set()) == ["2.5"]
+
+
+def test_a_decade_is_supported_by_any_year_in_it():
+    allowed = {2013.0, 2015.0, 0.438}
+    assert (
+        unsupported_numbers("Highest in the mid-2010s, at 44 percent.", allowed) == []
+    )
+    assert unsupported_numbers("It fell through the 2020s.", allowed) == ["2020s"]
+    # A bare year is still exact.
+    assert unsupported_numbers("It peaked in 2010.", allowed) == ["2010"]

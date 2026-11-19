@@ -342,6 +342,16 @@ function Pane(props: {
   );
 }
 
+/** Why a reply carries the "unverified" tag. */
+function unverified(event: FeedEvent): string {
+  if (event.error) return "No answer could be worked out, so nothing here comes from the data.";
+  const figures = [...new Set((event.rejected ?? []).flatMap((draft) => draft.unsupported))];
+  const why = figures.length
+    ? `The summary mentioned figures that are not in the result (${figures.join(", ")})`
+    : "The summary could not be checked against the result";
+  return `${why}, so it was left out. The chart and its numbers are unaffected.`;
+}
+
 const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing", set_view: "Redrawn" };
 
 export function Feed(props: {
@@ -380,7 +390,7 @@ export function Feed(props: {
               {OPS[event.op ?? ""] ?? "Chart"} · {event.title}
             </button>
           ) : (
-            <Line key={event.id} who={event.kind} text={event.text ?? ""} flagged={event.kind === "assistant" && event.verified === false} />
+            <Line key={event.id} who={event.kind} text={event.text ?? ""} flagged={event.kind === "assistant" && event.verified === false ? unverified(event) : null} />
           ),
         )}
         {props.pending && <Line who="user" text={props.pending} />}
@@ -420,7 +430,7 @@ export function Feed(props: {
   );
 }
 
-function Line({ who, text, flagged = false }: { who: "user" | "assistant"; text: string; flagged?: boolean }) {
+function Line({ who, text, flagged = null }: { who: "user" | "assistant"; text: string; flagged?: string | null }) {
   return (
     <div className="flex gap-3">
       <span className={`w-5 shrink-0 pt-0.5 text-xs font-medium ${who === "user" ? "text-ink-faint" : "text-primary-bright"}`}>
@@ -428,7 +438,11 @@ function Line({ who, text, flagged = false }: { who: "user" | "assistant"; text:
       </span>
       <p className={`max-w-3xl leading-relaxed ${who === "user" ? "text-ink-muted" : "text-ink-strong"}`}>
         {text}
-        {flagged && <span className="ml-2 text-xs text-warning">unverified</span>}
+        {flagged && (
+          <span className="ml-2 cursor-help text-xs text-warning underline decoration-dotted underline-offset-2" title={flagged} tabIndex={0}>
+            unverified
+          </span>
+        )}
       </p>
     </div>
   );

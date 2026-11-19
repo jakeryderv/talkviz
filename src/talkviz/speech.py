@@ -41,7 +41,8 @@ def unsupported_numbers(text: str, allowed: set[float]) -> list[str]:
     A number matches an allowed value that rounds to it at the precision it
     was written with ("about 12,400" or "12 thousand" for 12,431). Years must
     match exactly. A percentage also matches an allowed fraction ("11%" for
-    0.109). Whole numbers up to SMALL always pass.
+    0.109). A decade ("the mid-2010s") matches any allowed year in it. Whole
+    numbers up to SMALL always pass.
     """
     unsupported = []
     for match in _NUMBER.finditer(text):
@@ -54,6 +55,11 @@ def unsupported_numbers(text: str, allowed: set[float]) -> list[str]:
         elif whole and number <= SMALL:
             continue
         exact = whole and not unit and int(number) in YEARS
+        decade = exact and number % 10 == 0 and text[match.end(1) :].startswith("s")
+        if decade:
+            if not any(number <= year <= number + 9 for year in allowed):
+                unsupported.append(f"{digits}s")
+            continue
         figures = 15 if exact else _significant_figures(digits)
         if not any(_rounds_to(a, c, figures) for c in candidates for a in allowed):
             unsupported.append(match.group(0).strip())
