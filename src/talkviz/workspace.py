@@ -142,9 +142,43 @@ class Discuss(_Action):
     chart_id: str
 
 
+class RevertChart(_Action):
+    """Put a chart back to an earlier definition: undo. The earlier definition
+    becomes a new revision, so nothing is lost and it can itself be undone."""
+
+    op: Literal["revert_chart"]
+    chart_id: str
+    revision: int | None = Field(
+        default=None,
+        description="The revision to go back to. Leave out for the one before"
+        " the chart's current revision.",
+    )
+
+
 AnyAction = (
-    CreateChart | NarrowChart | UpdateChart | SetView | SetLens | ShowChart | Discuss
+    CreateChart
+    | NarrowChart
+    | UpdateChart
+    | RevertChart
+    | SetView
+    | SetLens
+    | ShowChart
+    | Discuss
 )
+
+
+class Past(BaseModel):
+    """A definition a chart has had."""
+
+    revision: int
+    title: str
+    sql: str
+    spec: ChartSpec
+    narrow: Narrow | None = None
+    at: str = ""
+    """When it was made."""
+
+
 Action = Annotated[AnyAction, Field(discriminator="op")]
 
 
@@ -152,6 +186,8 @@ class Workspace(BaseModel):
     """The charts of one chat, in the order they were created."""
 
     charts: list[Chart] = []
+    past: dict[str, list[Past]] = {}
+    """Every definition each chart has had, oldest first, for going back."""
 
     def get(self, chart_id: str) -> Chart | None:
         return next((c for c in self.charts if c.id == chart_id), None)
@@ -187,6 +223,23 @@ class Workspace(BaseModel):
                 parent=current.id,
                 narrow=Narrow(where=action.where, top=action.top, by=action.by),
             )
+        if isinstance(action, RevertChart):
+            wanted = action.revision or current.revision - 1
+            known = {past.revision: past for past in self.past.get(current.id, [])}
+            if wanted == current.revision or wanted not in known:
+                raise NoPast(
+                    f"Chart {current.label} has no earlier version to go back to."
+                    if action.revision is None
+                    else f"Chart {current.label} has no version {wanted} to go back to."
+                )
+            parent = self.get(current.parent or "")
+            restored = known[wanted].model_dump(exclude={"revision", "at"}) | {
+                "revision": current.revision + 1,
+                "based_on": parent.revision if parent else None,
+                "view": None,
+                "lens": None,
+            }
+            return Chart.model_validate({**current.model_dump(), **restored})
         if isinstance(action, ShowChart | Discuss):
             return current
         if isinstance(action, SetView):
@@ -244,6 +297,10 @@ LETTERS = "abcdefghijklmnopqrstuvwxyz"
 
 class NoRoom(Exception):
     """A chart cannot be given a sub-chart; the message says why."""
+
+
+class NoPast(Exception):
+    """A chart cannot be put back as asked; the message says why."""
 
 
 def chart_order(chart: Chart) -> tuple[int, str]:

@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from talkviz.settings import Settings
 from talkviz.sql import ColumnKind, QueryResult
-from talkviz.workspace import Chart, Lens, chart_order
+from talkviz.workspace import Chart, Lens, Past, chart_order
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -150,6 +150,11 @@ class Store:
                 row["name"] for row in db.execute("PRAGMA table_info(chats)")
             }:
                 db.execute("ALTER TABLE chats ADD COLUMN settings TEXT")
+            # And before a revision recorded which rows a sub-chart kept.
+            if "narrow" not in {
+                row["name"] for row in db.execute("PRAGMA table_info(chart_revisions)")
+            }:
+                db.execute("ALTER TABLE chart_revisions ADD COLUMN narrow")
 
     # Chats
 
@@ -282,9 +287,33 @@ class Store:
             )
             db.execute(
                 "INSERT OR IGNORE INTO chart_revisions (chat_id, chart_id, title, sql,"
-                " spec, revision, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [*values, _now()],
+                " spec, revision, created_at, narrow) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [*values, _now(), narrow],
             )
+
+    def revisions(self, chat_id: str) -> dict[str, list[Past]]:
+        """Every definition each of the chat's charts has had, oldest first."""
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT chart_id, revision, title, sql, spec, narrow, created_at"
+                " FROM chart_revisions WHERE chat_id = ? ORDER BY chart_id, revision",
+                [chat_id],
+            ).fetchall()
+        found: dict[str, list[Past]] = {}
+        for row in rows:
+            found.setdefault(row["chart_id"], []).append(
+                Past.model_validate(
+                    {
+                        "revision": row["revision"],
+                        "title": row["title"],
+                        "sql": row["sql"],
+                        "spec": json.loads(row["spec"]),
+                        "narrow": json.loads(row["narrow"]) if row["narrow"] else None,
+                        "at": row["created_at"],
+                    }
+                )
+            )
+        return found
 
     def set_view(self, chat_id: str, chart_id: str, view: str | None) -> None:
         """Record how a chart is drawn. Not a revision: the definition is unchanged."""

@@ -104,6 +104,15 @@ a new chart instead. "Change this one" still edits a chart in place.
 
 A model you choose runs at its own default effort unless you set one.
 
+### Undo
+
+Every change to a chart's query, title or kind is kept as a version. "Undo
+that" or "go back to how it was" puts the chart back to the version before,
+and the versions menu on the chart (shown once it has more than one) goes to
+any of them. Going back makes a new version, so nothing is lost and an undo
+can itself be undone. Zoom and hidden series are not versions; "reset" clears
+those.
+
 ## Use
 
 Register a DuckDB database with the manifest that describes it, then ask:

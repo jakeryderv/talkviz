@@ -112,6 +112,14 @@ def take_turn(
     )
 
 
+_UNDO = re.compile(
+    r"\b(?:undo|revert|go(?:ing)? back|put (?:it|that|this) back|change (?:it|that)"
+    r" back|how it was|as it was|(?:previous|earlier|first|last|original) version"
+    r"|version \d+)\b",
+    re.IGNORECASE,
+)
+
+
 def _shortcut(
     router: Router,
     question: str,
@@ -132,6 +140,10 @@ def _shortcut(
     # explain; the router only knows the charts there are.
     labels = {chart.label for chart in workspace.charts}
     if set(re.findall(r"\b\d+[a-z]\b", question.lower())) - labels:
+        return None
+    # Undoing a change is the planner's too: the router has no such answer,
+    # and takes "go back to the first version" for showing a chart again.
+    if _UNDO.search(question):
         return None
     found = router.shortcut(question, workspace, focus, seen)
     if found is None or not 0 < len(found.chart_ids) <= llm.MAX_ACTIONS:
