@@ -148,7 +148,8 @@ export const api = {
   deleteChat: (id: string) => request<void>(`/api/chats/${id}`, { method: "DELETE" }),
   /** The stage a turn in progress has reached: "route", "plan", "speak", or null. */
   progress: (id: string) => request<{ stage: string | null }>(`/api/chats/${id}/progress`),
-  say: (id: string, text: string) => request<TurnView>(`/api/chats/${id}/turns`, post({ text })),
+  /** `shown` is the charts on screen, so "it" means what the user is looking at. */
+  say: (id: string, text: string, shown: string[]) => request<TurnView>(`/api/chats/${id}/turns`, post({ text, shown })),
   setView: (id: string, chartId: string, kind: Kind) =>
     request<Chart>(`/api/chats/${id}/charts/${chartId}/view`, {
       method: "PUT",

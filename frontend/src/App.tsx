@@ -123,7 +123,7 @@ export function App() {
       setDraft(null);
       // Ask how far the turn has got while it runs.
       watch = window.setInterval(() => api.progress(chat.id).then((p) => setStage(p.stage)).catch(() => {}), 400);
-      const turn = await api.say(chat.id, text);
+      const turn = await api.say(chat.id, text, view ? shown : []);
       const changed = new Map(turn.charts.map((c) => [c.id, c]));
       setView({
         chat: turn.chat,
