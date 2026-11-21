@@ -38,8 +38,6 @@ class Turn:
     shortcut: bool = False
     rejected: list[Rejected] = field(default_factory=list)
     """Draft replies that failed the number check."""
-    caveats: list[int] = field(default_factory=list)
-    """The dataset caveats the reply mentions, by number."""
     """The router handled the turn, so no language model was called."""
 
 
@@ -93,7 +91,7 @@ def take_turn(
     done = time.perf_counter()
     for run in planned.runs:
         workspace.apply(run.chart)
-    history.append(Exchange(question, spoken.text, tuple(spoken.caveats)))
+    history.append(Exchange(question, spoken.text))
     return Turn(
         question=question,
         plan=planned.plan,
@@ -108,7 +106,6 @@ def take_turn(
         messages={"plan": planned.messages, "speak": spoken.messages},
         shortcut=shortcut,
         rejected=spoken.rejected,
-        caveats=spoken.caveats,
     )
 
 

@@ -40,6 +40,8 @@ class SourceInfo(BaseModel):
     """None if the database could not be opened."""
     examples: list[str]
     """Questions from the manifest, to suggest in a new chat."""
+    caveats: list[str]
+    """What to keep in mind when reading its numbers, shown beside each chart."""
 
 
 class PastView(BaseModel):
@@ -377,7 +379,6 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                 rejected=[asdict(draft) for draft in taken.rejected] or None,
                 models=_models(chosen, taken, router),
                 seconds={k: round(v, 2) for k, v in taken.seconds.items()},
-                caveats=taken.caveats or None,
             )
         )
         return TurnView(
@@ -495,6 +496,7 @@ def _source_info(source: Source) -> SourceInfo:
         description=" ".join(manifest.description.split()),
         data_version=version,
         examples=[example.question for example in manifest.examples],
+        caveats=[" ".join(caveat.split()) for caveat in manifest.caveats],
     )
 
 
@@ -604,8 +606,7 @@ def _exchanges(events: list[Event]) -> list[Exchange]:
         if event.kind == "user":
             question = event.text
         elif event.kind == "assistant" and question is not None:
-            said = tuple(event.caveats or ())
-            exchanges.append(Exchange(question, event.text or "", said))
+            exchanges.append(Exchange(question, event.text or ""))
             question = None
     return exchanges
 

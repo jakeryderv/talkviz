@@ -116,6 +116,8 @@ export type Source = {
   description: string;
   data_version: string | null;
   examples: string[];
+  /** What to keep in mind when reading its numbers. */
+  caveats: string[];
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

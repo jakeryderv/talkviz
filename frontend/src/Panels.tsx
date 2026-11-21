@@ -1,4 +1,4 @@
-import { ArrowUp, Box, ChartArea, ChartColumn, ChartColumnStacked, ChartLine, ChartPie, ChartScatter, ChevronDown, Code2, Columns2, Download, Grid3x3, Hash, History, Keyboard, LayoutGrid, type LucideIcon, Mic, Minus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Search, Settings as SettingsIcon, SlidersHorizontal, Table2, Trash2, X } from "lucide-react";
+import { ArrowUp, Box, ChartArea, ChartColumn, ChartColumnStacked, ChartLine, ChartPie, ChartScatter, ChevronDown, Code2, Columns2, Download, Grid3x3, Hash, History, Info, Keyboard, LayoutGrid, type LucideIcon, Mic, Minus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Search, Settings as SettingsIcon, SlidersHorizontal, Table2, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Chart, Chat, FeedEvent, Kind, Narrow, Run, Source } from "./api";
 import { ChartBody, figure } from "./charts/ChartBody";
@@ -306,6 +306,9 @@ function Pane(props: {
 }) {
   const { chart, source, beside } = props;
   const [details, setDetails] = useState(false);
+  // The limits of the data are read here; replies do not repeat them.
+  const [about, setAbout] = useState(false);
+  const caveats = source?.caveats ?? [];
   const past = chart.past ?? [];
   const kind = chart.view ?? chart.spec.kind;
   const run = chart.run;
@@ -394,6 +397,11 @@ function Pane(props: {
             { key: "csv", label: "Data (CSV)", onSelect: saveData },
           ]}
         />
+        {caveats.length > 0 && (
+          <IconButton tipAt="right" label={about ? "Hide the notes on this data" : "What to keep in mind about this data"} pressed={about} onClick={() => setAbout((open) => !open)}>
+            <Info size={15} />
+          </IconButton>
+        )}
         <IconButton tipAt="right" label={details ? "Hide the query" : "Show the query behind this chart"} pressed={details} onClick={() => setDetails((open) => !open)}>
           <Code2 size={15} />
         </IconButton>
@@ -408,6 +416,22 @@ function Pane(props: {
           <ChartBody spec={spec} run={run} fig={fig} />
         </div>
       </div>
+      {caveats.length > 0 && !about && !beside && (
+        <button type="button" onClick={() => setAbout(true)} className="mt-2 flex w-fit cursor-pointer items-center gap-1.5 text-xs text-ink-faint hover:text-ink">
+          <Info size={12} aria-hidden />
+          {caveats.length} {caveats.length === 1 ? "thing" : "things"} to keep in mind about this data
+        </button>
+      )}
+      {about && (
+        <div className="mt-3 max-h-48 overflow-auto rounded-md border border-line bg-surface p-3">
+          <h2 className="mb-1.5 text-xs font-medium text-ink-strong">Keep in mind about {source?.title ?? "this data"}</h2>
+          <ul className="list-disc space-y-1 pl-4 text-xs leading-relaxed text-ink-muted">
+            {caveats.map((caveat) => (
+              <li key={caveat}>{caveat}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {details && (
         <div className="mt-3 max-h-56 overflow-auto rounded-md border border-line bg-surface p-3">
           {chart.parent && (

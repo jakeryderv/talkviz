@@ -1,11 +1,12 @@
 """Asking about a chart: answered in words from its rows; nothing changes."""
 
 from test_lens import routed
-from test_llm import TOTALS, Scripted, create
+from test_llm import TOTALS, Scripted
 from test_route import Fixed
 
 from talkviz import llm
 from talkviz.route import Shortcut, _decide
+from talkviz.sql import QueryResult, ResultColumn
 from talkviz.turn import take_turn
 from talkviz.workspace import Chart, Workspace
 
@@ -140,53 +141,125 @@ def test_a_claim_that_one_series_is_always_above_another_is_checked():
     assert llm._overclaims("Ford was above Kia in 2023.", [pivot]) == []
 
 
-def chart(model, manifest, con, history, workspace=None):
-    """A turn that makes a chart, which is when a caveat may be added."""
-    workspace = Workspace() if workspace is None else workspace
-    return take_turn(model, "sales by category?", manifest, con, workspace, history)
-
-
-def test_a_caveat_is_said_once_in_a_conversation(manifest, con):
-    history, workspace = [], Workspace()
-    model = Scripted(
-        {"actions": [create()]},
-        "Games lead at 105.\nCaveat 1: Refunds are left out.",
-        {"actions": [create(title="Sales again")]},
-        "Games still lead at 105.",
-    )
-    first = chart(model, manifest, con, history, workspace)
-    assert first.reply == "Games lead at 105. Refunds are left out."
-    assert (first.caveats, history[0].caveats) == ([1], (1,))
-    assert "1. Refunds are not included." in told(model, 1)
-    second = chart(model, manifest, con, history, workspace)
-    assert second.caveats == []
-    instructions = told(model, 3)
-    assert "1. Refunds" not in instructions and "Add no caveat line" in instructions
-    assert "- Refunds are not included." in instructions
-
-
-def test_no_caveat_is_offered_when_a_turn_brings_no_new_results(manifest, con):
+def test_the_limits_of_the_data_are_left_to_the_screen(manifest, con):
     model = Scripted("Games led in January at 60.")
     ask(model, "who led in January", manifest, con)
-    assert "Add no caveat line" in told(model, 0)
+    instructions = told(model, 0)
+    assert "Refunds" not in instructions
+    assert "shown to the user beside every chart" in instructions
 
 
-def test_a_reply_gets_one_caveat(manifest, con):
+def test_a_question_asking_for_a_judgement_is_given_the_limits(manifest, con):
+    history = [llm.Exchange("who led", "Games led. Remember refunds are left out.")]
+    model = Scripted("Games did best. Keep in mind that refunds are not included.")
+    turn = ask(model, "which category did best", manifest, con, history)
+    assert "- Refunds are not included." in told(model, 0)
+    # And its reply keeps the limit, though one was said before.
+    assert turn.reply == "Games did best. Keep in mind that refunds are not included."
+
+
+def test_a_long_reply_is_asked_for_again_once(manifest, con):
+    long = "Games led in January. " + "It was a good month for games. " * 12
+    model = Scripted(long, "Games led in January at 60.")
+    assert ask(model, "who led", manifest, con).reply == "Games led in January at 60."
+    assert "too long" in model.sent(1)
+    # A second long one is let through, not looped on.
+    model = Scripted(long, long)
+    assert ask(model, "who led", manifest, con).reply == long.strip()
+
+
+CAVEATS = [
+    (
+        "Complaint counts are not defect rates. There is no count of vehicles on the"
+        " road, so a make with more complaints is not necessarily less safe."
+    ),
+    (
+        "Complaints are unverified consumer reports. Crash, fire, injury, and death"
+        " figures are what the consumer reported."
+    ),
+]
+
+
+def test_reminders_are_told_from_sentences_about_the_results():
+    for reminder in (
+        "Keep in mind that Ford sells a lot of vehicles.",
+        "Complaint counts are not defect rates, so more complaints is not less safe.",
+        "These are unverified consumer complaints, not confirmed reports.",
+        "That 2026 figure is partial, so the full-year number would be higher.",
+        "Note that 2026 is only partway through the year, so it runs low.",
+        "The latest year is only partway through, so it looks lower.",
+    ):
+        assert llm._is_reminder(reminder, CAVEATS), reminder
+    for finding in (
+        "Crash is the most common at about 96,700 complaints, then injury at 63,600.",
+        "Ford's 2026 figure of about 148 is partial.",
+        "Kia stays above Ford in every year since 2022.",
+        "Fire complaints and crash complaints moved together.",
+    ):
+        assert not llm._is_reminder(finding, CAVEATS), finding
+
+
+def test_a_reminder_is_said_once_in_a_conversation(manifest, con):
+    history = []
     model = Scripted(
-        {"actions": [create()]},
-        "Games lead.\nCaveat 1: No refunds.\nCaveat 1: Also this.",
+        "Games led at 60. Keep in mind that refunds are not included.",
+        "Toys led. Remember that refunds are not included. Books trailed.",
+        "Refunds are not included, so I can't say. Remember that.",
     )
-    turn = chart(model, manifest, con, [])
-    assert (turn.reply, turn.caveats) == ("Games lead. No refunds.", [1])
+    first = ask(model, "who led in January", manifest, con, history)
+    assert first.reply == "Games led at 60. Keep in mind that refunds are not included."
+    second = ask(model, "and in February", manifest, con, history)
+    assert second.reply == "Toys led. Books trailed."
+    # Asked about the latest period, that it is incomplete stays in.
+    partial = ["Up to 60.", "That year is incomplete."]
+    assert list(llm._unreminded(partial, [], True)) == ["Up to 60."]
+    assert list(llm._unreminded(partial, [], True, recent=True)) == partial
+    # A reply that opens with a limit is answering with it, and keeps it.
+    third = ask(model, "what were net sales", manifest, con, history)
+    assert third.reply == "Refunds are not included, so I can't say."
 
 
-def test_which_caveat_was_said_is_judged_from_its_words(manifest, con):
-    caveats = ["Refunds are not included.", "Orders placed by phone are missing."]
-    manifest = manifest.model_copy(update={"caveats": caveats})
-    model = Scripted(
-        {"actions": [create()]}, "Games lead.\nCaveat 1: Phone orders are missing."
+def test_the_partial_year_is_mentioned_to_the_model_once_unless_asked_about():
+    cells = {(2023, "a"): 9, (2023, "b"): 7, (2024, "a"): 6, (2024, "b"): 8}
+    result = QueryResult(
+        columns=[
+            ResultColumn("year", "BIGINT"),
+            ResultColumn("make", "VARCHAR"),
+            ResultColumn("fires", "BIGINT"),
+        ],
+        rows=[(x, name, value) for (x, name), value in cells.items()],
+        truncated=False,
+        seconds=0.0,
     )
-    assert chart(model, manifest, con, []).caveats == [2]
+    spec = {"kind": "line", "x": "year", "y": "fires", "series": "make"}
+    chart = Chart.model_validate(
+        {"id": "c1", "title": "Fires", "sql": "x", "spec": spec}
+    )
+    planned = llm.Planned(
+        llm.Plan(actions=[]), [llm.ChartRun(chart, result, "discuss", "")], b""
+    )
+    said = [llm.Exchange("fires?", "A led. 2024 is incomplete.")]
+
+    def prompt(question, history):
+        return llm._speech_prompt(question, planned, history, "2024-10-20")
+
+    assert "the data runs to" in prompt("fires by make", [])
+    assert "the data runs to" not in prompt("who leads", said)
+    assert "the data runs to" in prompt("did it drop in 2024", said)
+
+
+def test_a_partial_last_year_is_given_as_a_fact_about_that_year():
+    cells = {
+        (2023, "ford"): 90,
+        (2023, "kia"): 70,
+        (2024, "ford"): 60,
+        (2024, "kia"): 80,
+    }
+    pivot = llm.Pivot("year", "fires", [2023, 2024], ["ford", "kia"], cells, True)
+    [partial] = [f for f in llm._facts(pivot, "2024-10-20") if "incomplete" in f]
+    assert partial.startswith("2024 is incomplete: the data runs to 2024-10-20")
+    for whole in ("2024-12-31", "2025-03-01", None, "v7"):
+        assert not any("incomplete" in fact for fact in llm._facts(pivot, whole))
 
 
 def test_undo_is_never_taken_by_the_fast_path(manifest, con):
