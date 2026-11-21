@@ -152,7 +152,9 @@ examples:
 ```
 
 Answers are only as good as the manifest. Describe each column in plain
-words and state the traps in `caveats`; the reply will mention them.
+words and state the traps in `caveats`. A reply that brings new results
+mentions the one that matters most, once per chat; after that a caveat comes
+up again only when a question turns on it.
 
 ## Scoring a model
 

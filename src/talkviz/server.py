@@ -315,6 +315,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     focus=(_shown(history) or [None])[-1],
                     seen=_seen(_views(store, chat.id, workspace.charts)),
                     stage=lambda name: stages.__setitem__(chat.id, name),
+                    as_of=version,
                 )
         except llm.ModelFailed as error:
             reply = error.reply()
@@ -369,6 +370,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                 rejected=[asdict(draft) for draft in taken.rejected] or None,
                 models=_models(chosen, taken, router),
                 seconds={k: round(v, 2) for k, v in taken.seconds.items()},
+                caveats=taken.caveats or None,
             )
         )
         return TurnView(
@@ -495,7 +497,8 @@ def _exchanges(events: list[Event]) -> list[Exchange]:
         if event.kind == "user":
             question = event.text
         elif event.kind == "assistant" and question is not None:
-            exchanges.append(Exchange(question, event.text or ""))
+            said = tuple(event.caveats or ())
+            exchanges.append(Exchange(question, event.text or "", said))
             question = None
     return exchanges
 
