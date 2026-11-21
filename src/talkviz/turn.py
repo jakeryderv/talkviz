@@ -38,6 +38,8 @@ class Turn:
     shortcut: bool = False
     rejected: list[Rejected] = field(default_factory=list)
     """Draft replies that failed the number check."""
+    caveats: list[int] = field(default_factory=list)
+    """The dataset caveats the reply mentions, by number."""
     """The router handled the turn, so no language model was called."""
 
 
@@ -53,6 +55,7 @@ def take_turn(
     focus: str | None = None,
     seen: dict[str, Seen] | None = None,
     stage: Callable[[str], None] = lambda name: None,
+    as_of: str | None = None,
 ) -> Turn:
     """Plan and run the charts, write the reply, and update workspace and history.
 
@@ -60,7 +63,7 @@ def take_turn(
     `router`, if given, sees the message first and handles requests that need
     no planning; `focus` tells it which chart is on screen and `seen` what
     each chart's latest result looks like. `stage` is told when each stage
-    begins: "route", "plan", then "speak".
+    begins: "route", "plan", then "speak". `as_of` is the date the data runs to.
     """
     began = time.perf_counter()
     planned, misfit = None, None
@@ -84,11 +87,13 @@ def take_turn(
         spoken = llm.Spoken(fixed, verified=True, messages=b"[]")
     else:
         stage("speak")
-        spoken = llm.speak(speaker or model, question, manifest, planned, history)
+        spoken = llm.speak(
+            speaker or model, question, manifest, planned, history, as_of=as_of
+        )
     done = time.perf_counter()
     for run in planned.runs:
         workspace.apply(run.chart)
-    history.append(Exchange(question, spoken.text))
+    history.append(Exchange(question, spoken.text, tuple(spoken.caveats)))
     return Turn(
         question=question,
         plan=planned.plan,
@@ -103,6 +108,7 @@ def take_turn(
         messages={"plan": planned.messages, "speak": spoken.messages},
         shortcut=shortcut,
         rejected=spoken.rejected,
+        caveats=spoken.caveats,
     )
 
 

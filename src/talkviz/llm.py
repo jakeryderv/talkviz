@@ -13,10 +13,10 @@ written; it checks each sentence before passing it on.
 
 import os
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Literal, cast, get_args
+from typing import Any, Literal, cast, get_args
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
@@ -188,6 +188,8 @@ class ChartRun:
 class Exchange:
     question: str
     reply: str
+    caveats: tuple[int, ...] = ()
+    """The dataset caveats the reply mentioned, by their number in the manifest."""
 
 
 @dataclass
@@ -230,12 +232,52 @@ class Spoken:
     rejected: list[Rejected] = field(default_factory=list)
     """Drafts that failed the number check, oldest first, whether or not a
     later one passed."""
+    caveats: list[int] = field(default_factory=list)
+    """The dataset caveats the reply mentions, by their number in the manifest."""
+
+
+@dataclass
+class Pivot:
+    """A chart's result laid out as the chart is: one value for each x and
+    series. A chart with no series has one, named for its y column."""
+
+    x: str
+    y: str
+    xs: list
+    names: list[str]
+    cells: dict[tuple[Any, str], Any]
+    ordered: bool
+    """The x values run in order, as along a line chart."""
+
+    def values(self, name: str) -> list[tuple[Any, Any]]:
+        """The series' numeric values, with the x of each."""
+        found = [(x, self.cells.get((x, name))) for x in self.xs]
+        return [(x, value) for x, value in found if _numeric(value)]
+
+    def extreme(self, x: Any, pick: Callable) -> str | None:
+        """The series with the highest (max) or lowest (min) value at x."""
+        known = [
+            (self.cells[x, name], name)
+            for name in self.names
+            if _numeric(self.cells.get((x, name)))
+        ]
+        return pick(known)[1] if len(known) > 1 else None
+
+
+def _numeric(value: Any) -> bool:
+    return isinstance(value, int | float | Decimal) and not isinstance(value, bool)
 
 
 @dataclass
 class SpeechDeps:
     allowed: set[float]
+    pivots: list[Pivot] = field(default_factory=list)
+    """The series charts being spoken about, to check claims against."""
+    caveats: list[str] = field(default_factory=list)
+    """The manifest's caveats."""
     rejected: list[Rejected] = field(default_factory=list)
+    said: list[int] = field(default_factory=list)
+    """The caveats the accepted reply mentions."""
 
 
 def plan(
@@ -289,18 +331,22 @@ def speak(
     manifest: Manifest,
     planned: Planned,
     history: list[Exchange],
+    as_of: str | None = None,
 ) -> Spoken:
-    """Ask the model for the spoken reply to a planned turn."""
-    allowed = _allowed_numbers(question, manifest, planned)
-    deps = SpeechDeps(allowed)
+    """Ask the model for the spoken reply to a planned turn. `as_of` is the
+    data's version, usually the date it runs to, so the reply need not guess."""
+    allowed = _allowed_numbers(question, manifest, planned) | numbers_in([as_of or ""])
+    deps = SpeechDeps(allowed, _pivots(planned), manifest.caveats)
     agent = Agent(
         model,
         deps_type=SpeechDeps,
-        instructions=_speech_instructions(manifest),
+        instructions=_speech_instructions(manifest, _said(history), _fresh(planned)),
         retries=RETRIES,
     )
     agent.output_validator(_validate_speech)
     prompt = _speech_prompt(question, planned, history)
+    if as_of:
+        prompt += f"\n\nThe data's version, from data_version_sql: {as_of}."
     try:
         result = agent.run_sync(prompt, deps=deps)
     except UnexpectedModelBehavior:  # retries ran out
@@ -308,7 +354,11 @@ def speak(
     except ModelAPIError as error:
         raise ModelFailed.refused(error) from error
     return Spoken(
-        result.output.strip(), True, result.all_messages_json(), deps.rejected
+        result.output.strip(),
+        True,
+        result.all_messages_json(),
+        deps.rejected,
+        deps.said,
     )
 
 
@@ -328,14 +378,20 @@ def speak_stream(
     marked unverified. Either way the Spoken's text is the yielded chunks joined.
     """
     allowed = _allowed_numbers(question, manifest, planned)
-    agent = Agent(model, instructions=_speech_instructions(manifest))
+    agent = Agent(
+        model,
+        instructions=_speech_instructions(manifest, _said(history), _fresh(planned)),
+    )
     first = prompt = _speech_prompt(question, planned, history)
     said: list[str] = []
+    caveats: list[int] = []
     rejected: list[Rejected] = []
     for _ in range(RETRIES + 1):
         with agent.run_stream_sync(prompt) as stream:
             deltas = stream.stream_text(delta=True, debounce_by=None)
-            for sentence in _sentences(deltas):
+            for sentence in _one_caveat(_sentences(deltas)):
+                sentence, mentioned = _apart(sentence, manifest.caveats)
+                caveats += mentioned
                 unsupported = unsupported_numbers(sentence, allowed)
                 if unsupported:
                     rejected.append(Rejected(sentence, unsupported))
@@ -344,11 +400,11 @@ def speak_stream(
                 said.append(sentence)
             else:
                 messages = stream.all_messages_json()
-                yield Spoken(" ".join(said), True, messages, rejected)
+                yield Spoken(" ".join(said), True, messages, rejected, caveats)
                 return
             messages = stream.all_messages_json()
         if said:
-            yield Spoken(" ".join(said), False, messages, rejected)
+            yield Spoken(" ".join(said), False, messages, rejected, caveats)
             return
         prompt = f"{first}\n\n{_unsupported(unsupported)}"
     yield _fallback(planned)
@@ -464,16 +520,70 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
 
 
 def _validate_speech(ctx: RunContext[SpeechDeps], output: str) -> str:
+    output, mentioned = _apart(output, ctx.deps.caveats)
     unsupported = unsupported_numbers(output, ctx.deps.allowed)
     if unsupported:
-        ctx.deps.rejected.append(Rejected(output.strip(), unsupported))
+        ctx.deps.rejected.append(Rejected(output, unsupported))
         raise ModelRetry(_unsupported(unsupported))
     if _SECOND_THOUGHTS.search(output):
         raise ModelRetry(
             "The reply corrects itself partway. Write it again, giving only the"
             " final answer."
         )
+    overclaims = _overclaims(output, ctx.deps.pivots)
+    if overclaims:
+        raise ModelRetry(
+            "The reply says something holds throughout, and the results show"
+            " it does not:\n"
+            + "\n".join(overclaims)
+            + "\nWrite it again, saying where it holds or leaving the claim out."
+        )
+    ctx.deps.said = mentioned
     return output
+
+
+# How the reply marks a caveat, so that which ones were said can be recorded.
+_CAVEAT = re.compile(r"\bcaveat (\d+):\s*", re.IGNORECASE)
+
+
+def _apart(text: str, caveats: list[str]) -> tuple[str, list[int]]:
+    """The reply without its caveat marks, and the caveat it gave, if any. A
+    reply gets one caveat: anything from a second mark on is dropped. Which
+    caveat it was is judged from its words, since the number given can be
+    wrong."""
+    marks = list(_CAVEAT.finditer(text))
+    if len(marks) > 1:
+        text = text[: marks[1].start()]
+    clean = " ".join(_CAVEAT.sub("", text).split())
+    if not marks or not caveats:
+        return clean, []
+    given = _words(text[marks[0].end() :])
+    overlap = [len(given & _words(caveat)) for caveat in caveats]
+    named = int(marks[0].group(1))
+    if max(overlap) == 0:  # nothing to go on but the number
+        return clean, [named] if 1 <= named <= len(caveats) else []
+    return clean, [overlap.index(max(overlap)) + 1]
+
+
+def _words(text: str) -> set[str]:
+    """The words of some length in a text, for telling caveats apart."""
+    return {word for word in re.findall(r"[a-z]+", text.lower()) if len(word) > 4}
+
+
+def _one_caveat(sentences: Iterable[str]) -> Iterator[str]:
+    """The sentences up to a second caveat mark, as _apart() cuts a whole reply."""
+    marked = False
+    for sentence in sentences:
+        if _CAVEAT.search(sentence):
+            if marked:
+                return
+            marked = True
+        yield sentence
+
+
+def _said(history: list[Exchange]) -> set[int]:
+    """The caveats already mentioned in the conversation."""
+    return {number for exchange in history for number in exchange.caveats}
 
 
 # A reply that changes its mind aloud: "Ford led, wait, that's wrong, Kia did".
@@ -632,7 +742,44 @@ only to show the same result another way.
 """
 
 
-def _speech_instructions(manifest: Manifest) -> str:
+def _caveat_rule(manifest: Manifest, said: set[int], fresh: bool) -> str:
+    """What the reply model is told about caveats. One may be added, on its
+    own marked line, when the turn brings new results (`fresh`) and the
+    caveat has not been said in the conversation. The rest are listed apart,
+    to be touched on only when the question turns on one."""
+    numbered = [
+        (number, " ".join(caveat.split()))
+        for number, caveat in enumerate(manifest.caveats, start=1)
+    ]
+    new = [f"  {n}. {text}" for n, text in numbered if fresh and n not in said]
+    rest = [f"  - {text}" for n, text in numbered if not fresh or n in said]
+    rule = "- Add no caveat line."
+    if new:
+        rule = (
+            "- Add a caveat only when this answer would be misread without it,\n"
+            "  and one at most: the one that matters most here. It goes on a\n"
+            '  line of its own at the end, starting "Caveat N:" with its number\n'
+            "  from this list, then one short sentence in your own words:\n"
+            + "\n".join(new)
+        )
+    if rest:
+        rule += (
+            "\n- These limits of the data are known to the user or do not need\n"
+            "  saying now. Leave them out, unless what the user just asked turns\n"
+            "  on one; then work it into the answer in a few words:\n" + "\n".join(rest)
+        )
+    return rule
+
+
+# Turns that bring results the user has not seen, where a caveat may be due.
+_NEW_RESULTS = ("create_chart", "update_chart", "narrow_chart")
+
+
+def _fresh(planned: Planned) -> bool:
+    return any(run.op in _NEW_RESULTS for run in planned.runs)
+
+
+def _speech_instructions(manifest: Manifest, said: set[int], fresh: bool) -> str:
     return f"""\
 You are the voice of a data exploration tool for: {manifest.title}. The user
 asked something aloud, and charts were made or looked up in response. Write
@@ -644,15 +791,17 @@ charts.
 - Lead with the answer, then the most notable thing in the data.
 - Use only numbers that appear in the results below, written in digits. You
   may round them ("about 12,400"). Do not calculate new figures.
-- Mention a caveat only when it changes how this answer should be read, and
-  never one already said earlier in the conversation:
-{_bullets(manifest.caveats)}
+{_caveat_rule(manifest, said, fresh)}
 - If no chart was made, give the reason itself in one sentence, without
   saying that no chart was made, then make the offer or ask the question
   you were given.
 - If you name a chart by number, use the number given here, like "chart 1a".
 - Never correct yourself in the reply. For which was highest or lowest at
-  some point, read the "highest" and "lowest" columns; do not work it out.
+  some point, read the "highest" and "lowest" columns; for which led over
+  what span, and where each series started, ended, peaked and bottomed out,
+  read the Facts lines. Do not work these out yourself.
+- Say that something holds every year, always or throughout only when the
+  Facts show it. Otherwise say where it holds.
 - When the user is asking about a chart already on screen, answer their
   question from its rows, in two to four sentences: the pattern, the
   extremes, a comparison, a change over time, whatever answers it. Do not
@@ -701,6 +850,7 @@ def _speech_prompt(question: str, planned: Planned, history: list[Exchange]) -> 
     for run in planned.runs:
         result = run.result
         header, lines = _table(run.chart, result)
+        facts = _facts(_pivot(run.chart, result))
         rows = "\n".join(lines[:SPEECH_ROWS])
         shown = (
             f"first {SPEECH_ROWS} of {len(lines)} rows"
@@ -710,9 +860,41 @@ def _speech_prompt(question: str, planned: Planned, history: list[Exchange]) -> 
         parts.append(
             f"Chart {run.chart.label}, {_DID[run.op]}: {run.chart.title!r}"
             f" ({run.chart.shown}, {shown})\n{header}\n{rows}"
+            + ("\nFacts:\n" + "\n".join(facts) if facts else "")
             + (f"\n{run.note}" if run.note else "")
         )
     return "\n\n".join(parts)
+
+
+def _pivot(chart: Chart, result: QueryResult) -> Pivot | None:
+    spec = chart.spec
+    if not isinstance(spec, Bar | Line):
+        return None
+    names = [column.name for column in result.columns]
+    x, y, series = (getattr(spec, name, None) for name in ("x", "y", "series"))
+    if x not in names or y not in names:
+        return None
+    at_x, at_y = names.index(x), names.index(y)
+    at_s = names.index(series) if series in names else None
+    cells = {
+        (row[at_x], y if at_s is None else str(row[at_s])): row[at_y]
+        for row in result.rows
+    }
+    if len(cells) != len(result.rows):  # more than one value for an x and series
+        return None
+    return Pivot(
+        x=x,
+        y=y,
+        xs=list(dict.fromkeys(row[at_x] for row in result.rows)),
+        names=list(dict.fromkeys(name for _, name in cells)),
+        cells=cells,
+        ordered=isinstance(spec, Line),
+    )
+
+
+def _pivots(planned: Planned) -> list[Pivot]:
+    found = [_pivot(run.chart, run.result) for run in planned.runs]
+    return [pivot for pivot in found if pivot is not None]
 
 
 def _table(chart: Chart, result: QueryResult) -> tuple[str, list[str]]:
@@ -720,37 +902,131 @@ def _table(chart: Chart, result: QueryResult) -> tuple[str, list[str]]:
     series is laid out as the chart is, one row for each x value and one
     column for each series, which makes "which was highest in 2020" a matter
     of reading one row."""
-    spec = chart.spec
-    names = [column.name for column in result.columns]
-    x, y, series = (getattr(spec, name, None) for name in ("x", "y", "series"))
-    if isinstance(spec, Bar | Line) and series in names and x in names and y in names:
-        at_x, at_y, at_s = names.index(x), names.index(y), names.index(series)
-        cells = {(row[at_x], row[at_s]): row[at_y] for row in result.rows}
-        if len(cells) == len(result.rows):  # one value for each x and series
-            xs = list(dict.fromkeys(row[at_x] for row in result.rows))
-            columns = list(dict.fromkeys(row[at_s] for row in result.rows))
-            header = f"{x} | " + " | ".join(f"{name} ({y})" for name in columns)
-            lines = []
-            for k in xs:
-                values = [cells.get((k, c), "") for c in columns]
-                line = " | ".join(str(v) for v in [k, *values])
-                lines.append(line + _extremes(columns, values))
-            return header + " | highest | lowest", lines
-    header = " | ".join(names)
+    pivot = _pivot(chart, result)
+    if pivot is not None and getattr(chart.spec, "series", None):
+        header = f"{pivot.x} | " + " | ".join(f"{n} ({pivot.y})" for n in pivot.names)
+        lines = []
+        for x in pivot.xs:
+            values = [pivot.cells.get((x, name), "") for name in pivot.names]
+            ends = f"{pivot.extreme(x, max) or ''} | {pivot.extreme(x, min) or ''}"
+            lines.append(" | ".join(str(v) for v in [x, *values]) + f" | {ends}")
+        return header + " | highest | lowest", lines
+    header = " | ".join(column.name for column in result.columns)
     return header, [" | ".join(str(value) for value in row) for row in result.rows]
 
 
-def _extremes(names: list, values: list) -> str:
-    """Which of a row's values is highest and lowest, worked out here so the
-    model reads the ranking instead of working it out mid-sentence."""
-    known = [
-        (value, str(name))
-        for name, value in zip(names, values, strict=True)
-        if isinstance(value, int | float | Decimal) and not isinstance(value, bool)
-    ]
-    if len(known) < 2:
-        return " | | "
-    return f" | {max(known)[1]} | {min(known)[1]}"
+FACT_SERIES = 12  # series described one by one, at most
+
+
+def _facts(pivot: Pivot | None) -> list[str]:
+    """Things about a result that are easy to get wrong by eye, worked out
+    here so the model reads them: which series led over what span, and where
+    each started, ended, peaked and bottomed out. Every number is one from
+    the result."""
+    if pivot is None or len(pivot.xs) < 2:
+        return []
+    facts = []
+    if pivot.ordered and len(pivot.names) > 1:
+        for word, pick in (("Highest", max), ("Lowest", min)):
+            spans = _spans([(x, pivot.extreme(x, pick)) for x in pivot.xs])
+            if spans:
+                facts.append(f"{word} {pivot.y}: {spans}.")
+    for name in pivot.names[:FACT_SERIES]:
+        values = pivot.values(name)
+        if len(values) < 2:
+            continue
+        (peak_x, peak), (low_x, low) = (
+            pick(values, key=lambda pair: pair[1]) for pick in (max, min)
+        )
+        ends = f"peak {peak} at {peak_x}, low {low} at {low_x}"
+        if pivot.ordered:
+            (first_x, first), (last_x, last) = values[0], values[-1]
+            ends = f"starts {first} at {first_x}, ends {last} at {last_x}, {ends}"
+        facts.append(f"{name}: {ends}.")
+    return facts
+
+
+def _spans(leaders: list[tuple[Any, str | None]]) -> str:
+    """ "KIA 2018 to 2021, FORD 2022": who led at each x, with runs joined."""
+    spans: list[list] = []
+    for x, name in leaders:
+        if name is None:
+            continue
+        if spans and spans[-1][0] == name:
+            spans[-1][2] = x
+        else:
+            spans.append([name, x, x])
+    return ", ".join(
+        f"{name} {first}" if first == last else f"{name} {first} to {last}"
+        for name, first, last in spans
+    )
+
+
+# Words that claim something holds at every point, and words that take it back.
+_THROUGHOUT = re.compile(
+    r"\b(?:every|each|always|throughout|consistently|in all)\b", re.IGNORECASE
+)
+_EXCEPT = re.compile(r"\b(?:except|apart from|other than|but)\b", re.IGNORECASE)
+_RANK = re.compile(
+    r"\b(?:most|highest|leads?|led|leading|top|tops|lowest|fewest|least|bottom)\b",
+    re.IGNORECASE,
+)
+
+
+def _overclaims(text: str, pivots: list[Pivot]) -> list[str]:
+    """Claims in a reply that something holds throughout when the results show
+    it does not: "Ford has the most every year" where Kia leads some years,
+    or "Toyota is above Honda throughout" where they cross. Only claims that
+    name one or two series are judged; anything else is let through."""
+    problems = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        if not _THROUGHOUT.search(sentence) or _EXCEPT.search(sentence):
+            continue
+        for pivot in pivots:
+            named = [
+                name
+                for name in pivot.names
+                if len(name) > 1
+                and re.search(rf"\b{re.escape(name)}\b", sentence, re.IGNORECASE)
+            ]
+            if len(pivot.names) < 2 or len(named) not in (1, 2):
+                continue
+            if len(named) == 2:
+                problem = _crossing(pivot, *named)
+            elif _RANK.search(sentence):
+                problem = _not_always(pivot, named[0])
+            else:
+                problem = None
+            if problem:
+                problems.append(problem)
+    return problems
+
+
+def _crossing(pivot: Pivot, one: str, other: str) -> str | None:
+    """Where two series swap order, if they do."""
+    first, second = dict(pivot.values(one)), dict(pivot.values(other))
+    both = [x for x in pivot.xs if x in first and x in second]
+    above = [x for x in both if first[x] > second[x]]
+    below = [x for x in both if first[x] < second[x]]
+    if not above or not below:
+        return None
+    return (
+        f"{one} is above {other} at {above[0]} ({first[above[0]]} to"
+        f" {second[above[0]]}) and below it at {below[0]} ({first[below[0]]} to"
+        f" {second[below[0]]})."
+    )
+
+
+def _not_always(pivot: Pivot, name: str) -> str | None:
+    """Who is highest and lowest at each x, if `name` is not always either."""
+    highest = [pivot.extreme(x, max) for x in pivot.xs]
+    lowest = [pivot.extreme(x, min) for x in pivot.xs]
+    if all(n == name for n in highest if n) or all(n == name for n in lowest if n):
+        return None
+    return (
+        f"Highest: {_spans(list(zip(pivot.xs, highest, strict=True)))}."
+        f" Lowest: {_spans(list(zip(pivot.xs, lowest, strict=True)))}."
+    )
 
 
 _DID = {
