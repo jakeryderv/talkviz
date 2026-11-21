@@ -99,6 +99,9 @@ class View(BaseModel):
 
 class Say(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
+    shown: list[str] = Field(default_factory=list, max_length=8)
+    """The charts on screen when it was said, the last being the latest added.
+    "It" and requests that name no chart are taken to mean that one."""
 
 
 class TurnView(BaseModel):
@@ -312,7 +315,7 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     _exchanges(history),
                     speaker=speaker,
                     router=router,
-                    focus=(_shown(history) or [None])[-1],
+                    focus=_focus(body.shown, workspace, history),
                     seen=_seen(_views(store, chat.id, workspace.charts)),
                     stage=lambda name: stages.__setitem__(chat.id, name),
                     as_of=version,
@@ -468,10 +471,29 @@ def _seen(charts: list[ChartView]) -> dict[str, route.Seen]:
         chart.id: route.Seen(
             columns=[column.name for column in chart.run.columns],
             views=[view.kind for view in chart.views[1:]],
+            series=_series(chart),
         )
         for chart in charts
         if chart.run is not None
     }
+
+
+def _focus(shown: list[str], workspace: Workspace, history: list[Event]) -> str | None:
+    """The chart a request that names none is about: the one on screen, as the
+    browser reports it, or failing that the one the last turn touched."""
+    known = {chart.id for chart in workspace.charts}
+    on_screen = [chart_id for chart_id in shown if chart_id in known]
+    return (on_screen or _shown(history) or [None])[-1]
+
+
+def _series(chart: ChartView) -> list[str]:
+    """The names of the chart's series, if it has any."""
+    run, series = chart.run, getattr(chart.spec, "series", None)
+    names = [column.name for column in run.columns] if run else []
+    if run is None or series not in names:
+        return []
+    at = names.index(series)
+    return list(dict.fromkeys(str(row[at]) for row in run.rows))[: route.MAX_AXIS]
 
 
 def _shown(events: list[Event]) -> list[str]:

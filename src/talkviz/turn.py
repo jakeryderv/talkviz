@@ -79,7 +79,7 @@ def take_turn(
     if planned is None:
         stage("plan")
         planned = llm.plan(
-            model, question, manifest, con, workspace, history, misfit=misfit
+            model, question, manifest, con, workspace, history, misfit, focus
         )
     planned_at = time.perf_counter()
     fixed = llm.view_reply(planned.runs)

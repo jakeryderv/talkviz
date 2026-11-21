@@ -288,11 +288,13 @@ def plan(
     workspace: Workspace,
     history: list[Exchange],
     misfit: tuple[Chart, str, str] | None = None,
+    focus: str | None = None,
 ) -> Planned:
     """Ask the model for chart actions; all returned actions have been run.
 
     `misfit` is a view already known not to fit: the chart, the kind asked
-    for, and why not. The model is told, which saves it finding out.
+    for, and why not. The model is told, which saves it finding out. `focus`
+    is the id of the chart on screen, which "it" and "this" mean.
     """
     deps = PlanDeps(manifest, con, workspace)
     hint = None
@@ -316,7 +318,7 @@ def plan(
     agent.output_validator(_validate_plan)
     try:
         result = agent.run_sync(
-            _plan_prompt(question, workspace, history, hint), deps=deps
+            _plan_prompt(question, workspace, history, hint, focus), deps=deps
         )
     except ModelAPIError as error:
         raise ModelFailed.refused(error) from error
@@ -814,7 +816,11 @@ charts.
 
 
 def _plan_prompt(
-    question: str, workspace: Workspace, history: list[Exchange], hint: str | None
+    question: str,
+    workspace: Workspace,
+    history: list[Exchange],
+    hint: str | None,
+    focus: str | None = None,
 ) -> str:
     parts = []
     if history:
@@ -834,6 +840,12 @@ def _plan_prompt(
             for c in workspace.charts
         )
         parts.append("Charts in this chat (the last is the most recent):\n" + charts)
+        on_screen = next((c for c in workspace.charts if c.id == focus), None)
+        if on_screen is not None:
+            parts.append(
+                f'On screen now: {on_screen.id}, {on_screen.title!r}. "It",'
+                ' "this" and requests that name no chart mean this one.'
+            )
     parts.append(f"The user says: {question}")
     if hint:
         parts.append(hint)

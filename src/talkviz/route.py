@@ -13,7 +13,7 @@ Uses Jev through OpenRouter's Decisions API, which is in alpha.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import httpx
@@ -49,6 +49,8 @@ class Seen:
     columns: list[str]
     views: list[str]
     """The other kinds it can be drawn as."""
+    series: list[str] = field(default_factory=list)
+    """The names of its series, so "hide Ford" is seen to be about a chart."""
 
 
 class Router(Protocol):
@@ -166,6 +168,8 @@ def _state(
         if chart.id in seen:
             entry["columns"] = seen[chart.id].columns
             entry["can_also_be_drawn_as"] = seen[chart.id].views
+            if seen[chart.id].series:
+                entry["series"] = seen[chart.id].series
         charts.append(entry)
     return {
         "charts_in_order_created": charts,

@@ -289,3 +289,22 @@ def test_progress_is_empty_when_no_turn_is_running(source):
     chat = app.post("/api/chats", json={}).json()
     app.post(f"/api/chats/{chat['id']}/turns", json={"text": "sales by category?"})
     assert app.get(f"/api/chats/{chat['id']}/progress").json() == {"stage": None}
+
+
+def test_the_chart_on_screen_is_the_one_a_follow_up_means(source):
+    model = Scripted(
+        {"actions": [create()]},
+        "Games lead at 105.",
+        {"actions": [create(title="Sales again")]},
+        "Games lead at 105.",
+        {"actions": [{"op": "discuss", "chart_id": "c1"}]},
+        "Toys are lowest at 35.",
+    )
+    app = TestClient(create_app(model=model, store=Store()))
+    chat = app.post("/api/chats", json={}).json()["id"]
+    for text in ("sales by category?", "and again"):
+        app.post(f"/api/chats/{chat}/turns", json={"text": text})
+    # The last turn made c2, but the user has clicked back to c1.
+    said = {"text": "which is lowest", "shown": ["c1", "nonsense"]}
+    assert app.post(f"/api/chats/{chat}/turns", json=said).status_code == 200
+    assert "On screen now: c1, 'Sales by category'" in model.sent(4)
