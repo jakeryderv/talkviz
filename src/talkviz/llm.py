@@ -189,8 +189,6 @@ class ChartRun:
 class Exchange:
     question: str
     reply: str
-    caveats: tuple[int, ...] = ()
-    """The dataset caveats the reply mentioned, by their number in the manifest."""
 
 
 @dataclass
@@ -233,8 +231,6 @@ class Spoken:
     rejected: list[Rejected] = field(default_factory=list)
     """Drafts that failed the number check, oldest first, whether or not a
     later one passed."""
-    caveats: list[int] = field(default_factory=list)
-    """The dataset caveats the reply mentions, by their number in the manifest."""
 
 
 @dataclass
@@ -275,10 +271,16 @@ class SpeechDeps:
     pivots: list[Pivot] = field(default_factory=list)
     """The series charts being spoken about, to check claims against."""
     caveats: list[str] = field(default_factory=list)
-    """The manifest's caveats."""
+    """The manifest's caveats, to tell when a sentence is one."""
+    reminded: bool = False
+    """A reminder of the data's limits has been said in this conversation."""
+    judging: bool = False
+    """The question asks for a judgement, so limits belong in the answer."""
+    recent: bool = False
+    """The question is about the latest period or a fall."""
+    shortened: bool = False
+    """The reply has been sent back once for being too long."""
     rejected: list[Rejected] = field(default_factory=list)
-    said: list[int] = field(default_factory=list)
-    """The caveats the accepted reply mentions."""
 
 
 def plan(
@@ -339,17 +341,24 @@ def speak(
     """Ask the model for the spoken reply to a planned turn. `as_of` is the
     data's version, usually the date it runs to, so the reply need not guess."""
     allowed = _allowed_numbers(question, manifest, planned) | numbers_in([as_of or ""])
-    deps = SpeechDeps(allowed, _pivots(planned), manifest.caveats)
+    reminded = _reminded(history, manifest.caveats)
+    judging = _judging(question)
+    deps = SpeechDeps(
+        allowed,
+        _pivots(planned),
+        manifest.caveats,
+        reminded,
+        judging=judging,
+        recent=bool(_RECENT.search(question)),
+    )
     agent = Agent(
         model,
         deps_type=SpeechDeps,
-        instructions=_speech_instructions(manifest, _said(history), _fresh(planned)),
+        instructions=_speech_instructions(manifest, _judging(question)),
         retries=RETRIES,
     )
     agent.output_validator(_validate_speech)
-    prompt = _speech_prompt(question, planned, history)
-    if as_of:
-        prompt += f"\n\nThe data's version, from data_version_sql: {as_of}."
+    prompt = _speech_prompt(question, planned, history, as_of)
     try:
         result = agent.run_sync(prompt, deps=deps)
     except UnexpectedModelBehavior:  # retries ran out
@@ -361,7 +370,6 @@ def speak(
         True,
         result.all_messages_json(),
         deps.rejected,
-        deps.said,
     )
 
 
@@ -383,18 +391,20 @@ def speak_stream(
     allowed = _allowed_numbers(question, manifest, planned)
     agent = Agent(
         model,
-        instructions=_speech_instructions(manifest, _said(history), _fresh(planned)),
+        instructions=_speech_instructions(manifest, _judging(question)),
     )
     first = prompt = _speech_prompt(question, planned, history)
     said: list[str] = []
-    caveats: list[int] = []
     rejected: list[Rejected] = []
     for _ in range(RETRIES + 1):
         with agent.run_stream_sync(prompt) as stream:
             deltas = stream.stream_text(delta=True, debounce_by=None)
-            for sentence in _one_caveat(_sentences(deltas)):
-                sentence, mentioned = _apart(sentence, manifest.caveats)
-                caveats += mentioned
+            kept = _sentences(deltas)
+            if not _judging(question):
+                reminded = _reminded(history, manifest.caveats)
+                recent = bool(_RECENT.search(question))
+                kept = _unreminded(kept, manifest.caveats, reminded, recent)
+            for sentence in kept:
                 unsupported = unsupported_numbers(sentence, allowed)
                 if unsupported:
                     rejected.append(Rejected(sentence, unsupported))
@@ -403,11 +413,11 @@ def speak_stream(
                 said.append(sentence)
             else:
                 messages = stream.all_messages_json()
-                yield Spoken(" ".join(said), True, messages, rejected, caveats)
+                yield Spoken(" ".join(said), True, messages, rejected)
                 return
             messages = stream.all_messages_json()
         if said:
-            yield Spoken(" ".join(said), False, messages, rejected, caveats)
+            yield Spoken(" ".join(said), False, messages, rejected)
             return
         prompt = f"{first}\n\n{_unsupported(unsupported)}"
     yield _fallback(planned)
@@ -532,15 +542,25 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
 
 
 def _validate_speech(ctx: RunContext[SpeechDeps], output: str) -> str:
-    output, mentioned = _apart(output, ctx.deps.caveats)
+    if not ctx.deps.judging:
+        kept = _unreminded(
+            _split(output), ctx.deps.caveats, ctx.deps.reminded, ctx.deps.recent
+        )
+        output = " ".join(kept)
     unsupported = unsupported_numbers(output, ctx.deps.allowed)
     if unsupported:
-        ctx.deps.rejected.append(Rejected(output, unsupported))
+        ctx.deps.rejected.append(Rejected(output.strip(), unsupported))
         raise ModelRetry(_unsupported(unsupported))
     if _SECOND_THOUGHTS.search(output):
         raise ModelRetry(
             "The reply corrects itself partway. Write it again, giving only the"
             " final answer."
+        )
+    if len(output.split()) > LONGEST_REPLY and not ctx.deps.shortened:
+        ctx.deps.shortened = True
+        raise ModelRetry(
+            "That is too long to listen to. Say it again in under 40 words:"
+            " the answer, and at most one thing that stands out."
         )
     overclaims = _overclaims(output, ctx.deps.pivots)
     if overclaims:
@@ -550,52 +570,84 @@ def _validate_speech(ctx: RunContext[SpeechDeps], output: str) -> str:
             + "\n".join(overclaims)
             + "\nWrite it again, saying where it holds or leaving the claim out."
         )
-    ctx.deps.said = mentioned
     return output
 
 
-# How the reply marks a caveat, so that which ones were said can be recorded.
-_CAVEAT = re.compile(r"\bcaveat (\d+):\s*", re.IGNORECASE)
+# A question that asks for a judgement the data's limits bear on, where a
+# limit belongs in the answer.
+_JUDGING = re.compile(
+    r"\b(?:safe|safer|safest|unsafe|danger|reliab|best|worst|better|worse|trust"
+    r"|accurate|really|actually|fair|why|should|blame|fault|defect|mean)",
+    re.IGNORECASE,
+)
+LONGEST_REPLY = 60  # words, before the reply is asked for again, shorter
 
 
-def _apart(text: str, caveats: list[str]) -> tuple[str, list[int]]:
-    """The reply without its caveat marks, and the caveat it gave, if any. A
-    reply gets one caveat: anything from a second mark on is dropped. Which
-    caveat it was is judged from its words, since the number given can be
-    wrong."""
-    marks = list(_CAVEAT.finditer(text))
-    if len(marks) > 1:
-        text = text[: marks[1].start()]
-    clean = " ".join(_CAVEAT.sub("", text).split())
-    if not marks or not caveats:
-        return clean, []
-    given = _words(text[marks[0].end() :])
-    overlap = [len(given & _words(caveat)) for caveat in caveats]
-    named = int(marks[0].group(1))
-    if max(overlap) == 0:  # nothing to go on but the number
-        return clean, [named] if 1 <= named <= len(caveats) else []
-    return clean, [overlap.index(max(overlap)) + 1]
+# How a sentence that only reminds the user of the data's limits tends to open.
+_REMINDER = re.compile(
+    r"^(?:but |and |also,? |just |please )?(?:keep in mind|bear in mind|remember"
+    r"|note that|do note|that said|a caveat|one caveat|as a reminder|be aware)",
+    re.IGNORECASE,
+)
+_PARTIAL = re.compile(
+    r"\b(?:partial|incomplete|only part|partway|part[- ]year|not a full year)",
+    re.IGNORECASE,
+)
+
+
+def _judging(question: str) -> bool:
+    return bool(_JUDGING.search(question))
+
+
+def _split(text: str) -> list[str]:
+    return [part for part in re.split(r"(?<=[.!?])\s+", text.strip()) if part]
 
 
 def _words(text: str) -> set[str]:
-    """The words of some length in a text, for telling caveats apart."""
+    """The longer words of a text, for telling what it is about."""
     return {word for word in re.findall(r"[a-z]+", text.lower()) if len(word) > 4}
 
 
-def _one_caveat(sentences: Iterable[str]) -> Iterator[str]:
-    """The sentences up to a second caveat mark, as _apart() cuts a whole reply."""
-    marked = False
-    for sentence in sentences:
-        if _CAVEAT.search(sentence):
-            if marked:
-                return
-            marked = True
+def _is_reminder(sentence: str, caveats: list[str]) -> bool:
+    """Whether a sentence is there to remind the user of a limit of the data
+    rather than to say something about the results. It opens like a reminder;
+    or it gives no figures and is mostly a caveat's words, or is about a
+    period being incomplete."""
+    if _REMINDER.search(sentence):
+        return True
+    if re.search(r"\d", re.sub(r"\b(?:19|20)\d\d\b", "", sentence)):
+        return False  # it reports a figure, so it is about the results
+    if _PARTIAL.search(sentence):
+        return True
+    words = _words(sentence)
+    shared = max((len(words & _words(caveat)) for caveat in caveats), default=0)
+    return shared >= 3 and shared >= 0.4 * len(words)
+
+
+def _reminded(history: list[Exchange], caveats: list[str]) -> bool:
+    """Whether an earlier reply in the conversation already gave a reminder."""
+    return any(
+        _is_reminder(sentence, caveats)
+        for exchange in history
+        for sentence in _split(exchange.reply)
+    )
+
+
+def _unreminded(
+    sentences: Iterable[str], caveats: list[str], reminded: bool, recent: bool = False
+) -> Iterator[str]:
+    """The sentences of a reply without its repeated reminders. A reply's
+    first sentence is its answer and always stays, even when the answer is a
+    limit of the data. Of the rest, one reminder is let through in a
+    conversation; any after that is dropped, since the limits are on screen."""
+    for index, sentence in enumerate(sentences):
+        # Asked about the latest period, that it is incomplete is the answer.
+        asked = recent and _PARTIAL.search(sentence)
+        if index and not asked and _is_reminder(sentence, caveats):
+            if reminded:
+                continue
+            reminded = True
         yield sentence
-
-
-def _said(history: list[Exchange]) -> set[int]:
-    """The caveats already mentioned in the conversation."""
-    return {number for exchange in history for number in exchange.caveats}
 
 
 # A reply that changes its mind aloud: "Ford led, wait, that's wrong, Kia did".
@@ -762,72 +814,69 @@ only to show the same result another way.
 """
 
 
-def _caveat_rule(manifest: Manifest, said: set[int], fresh: bool) -> str:
-    """What the reply model is told about caveats. One may be added, on its
-    own marked line, when the turn brings new results (`fresh`) and the
-    caveat has not been said in the conversation. The rest are listed apart,
-    to be touched on only when the question turns on one."""
-    numbered = [
-        (number, " ".join(caveat.split()))
-        for number, caveat in enumerate(manifest.caveats, start=1)
-    ]
-    new = [f"  {n}. {text}" for n, text in numbered if fresh and n not in said]
-    rest = [f"  - {text}" for n, text in numbered if not fresh or n in said]
-    rule = "- Add no caveat line."
-    if new:
-        rule = (
-            "- Add a caveat only when this answer would be misread without it,\n"
-            "  and one at most: the one that matters most here. It goes on a\n"
-            '  line of its own at the end, starting "Caveat N:" with its number\n'
-            "  from this list, then one short sentence in your own words:\n"
-            + "\n".join(new)
+def _limits_rule(manifest: Manifest, judging: bool) -> str:
+    """What the reply model is told about the data's limits. They are shown
+    beside every chart, so the model is only given them, to answer with, when
+    the question asks for a judgement they bear on. Otherwise it is not shown
+    them at all: what it is not shown it does not recite."""
+    if not judging or not manifest.caveats:
+        return (
+            "- The data's limits are shown to the user beside every chart. Do\n"
+            '  not warn, remind or add "keep in mind" about what the data can\n'
+            "  or cannot show."
         )
-    if rest:
-        rule += (
-            "\n- These limits of the data are known to the user or do not need\n"
-            "  saying now. Leave them out, unless what the user just asked turns\n"
-            "  on one; then work it into the answer in a few words:\n" + "\n".join(rest)
-        )
-    return rule
+    return (
+        "- The user is asking for a judgement, and these limits bear on it. Let\n"
+        "  the one that matters be part of your answer, plainly and once:\n"
+        + _bullets(manifest.caveats)
+    )
 
 
-# Turns that bring results the user has not seen, where a caveat may be due.
-_NEW_RESULTS = ("create_chart", "update_chart", "narrow_chart", "revert_chart")
-
-
-def _fresh(planned: Planned) -> bool:
-    return any(run.op in _NEW_RESULTS for run in planned.runs)
-
-
-def _speech_instructions(manifest: Manifest, said: set[int], fresh: bool) -> str:
+def _speech_instructions(manifest: Manifest, judging: bool = False) -> str:
     return f"""\
-You are the voice of a data exploration tool for: {manifest.title}. The user
-asked something aloud, and charts were made or looked up in response. Write
-what to say back. It will be read out by a text-to-speech voice, and the user can see the
-charts.
+You are the voice of a data exploration tool for: {manifest.title}. You and
+the user are looking at the same charts and talking them over. They said
+something, and charts were made or looked up in response. Write what to say
+back. It is read out by a text-to-speech voice.
 
-- One to three short sentences of plain spoken English. No lists, symbols,
-  formatting, or column names.
-- Lead with the answer, then the most notable thing in the data.
+How to talk:
+- Like a colleague beside them, not a report. Answer what they just asked in
+  one or two short spoken sentences; three at most when they ask what a
+  chart shows. No lists, symbols, formatting, or column names.
+- Say the one or two things that matter for their question, with at most
+  three figures. Do not go through every series, or recite each peak, low,
+  start and end: the chart is in front of them.
+- Carry on from the conversation so far. Do not repeat a figure or an
+  observation you have already given, and do not describe again a chart
+  they have already heard about. After a filter or a change, say what is
+  different now.
+- Do not open by naming or describing the chart ("Chart 1 shows", "Here
+  is", "Looking at chart 1b", "Chart 1b now covers"); start with what you
+  have to say. Name a chart by number
+  only when it helps tell charts apart, using the number given here, like
+  "chart 1a".
+
+Numbers:
 - Use only numbers that appear in the results below, written in digits. You
   may round them ("about 12,400"). Do not calculate new figures.
-{_caveat_rule(manifest, said, fresh)}
-- If no chart was made, give the reason itself in one sentence, without
-  saying that no chart was made, then make the offer or ask the question
-  you were given.
-- If you name a chart by number, use the number given here, like "chart 1a".
 - Never correct yourself in the reply. For which was highest or lowest at
   some point, read the "highest" and "lowest" columns; for which led over
   what span, and where each series started, ended, peaked and bottomed out,
   read the Facts lines. Do not work these out yourself.
 - Say that something holds every year, always or throughout only when the
   Facts show it. Otherwise say where it holds.
-- When the user is asking about a chart already on screen, answer their
-  question from its rows, in two to four sentences: the pattern, the
-  extremes, a comparison, a change over time, whatever answers it. Do not
-  describe the chart or say that it is shown. The data cannot show why
-  something happened; if they ask why, say what the data does show and
-  suggest one thing that could be charted next to look into it.
+
+Limits of the data:
+{_limits_rule(manifest, judging)}
+- When the Facts say the latest period is incomplete, mention that only if
+  you are talking about that period's value, and in a few words.
+
+Otherwise:
+- If no chart was made, give the reason itself in one sentence, without
+  saying that no chart was made, then make the offer or ask the question
+  you were given.
+- The data cannot show why something happened; if they ask why, say what
+  the data does show and suggest one thing that could be charted next.
 - When the rows listed are only the first of many, speak about those and do
   not say the data is incomplete.
 """
@@ -870,7 +919,9 @@ def _plan_prompt(
     return "\n\n".join(parts)
 
 
-def _speech_prompt(question: str, planned: Planned, history: list[Exchange]) -> str:
+def _speech_prompt(
+    question: str, planned: Planned, history: list[Exchange], as_of: str | None = None
+) -> str:
     parts = []
     if history:
         parts.append("Conversation so far:\n" + _transcript(history))
@@ -880,7 +931,10 @@ def _speech_prompt(question: str, planned: Planned, history: list[Exchange]) -> 
     for run in planned.runs:
         result = run.result
         header, lines = _table(run.chart, result)
-        facts = _facts(_pivot(run.chart, result))
+        # The partial last year is news once; after that only when asked about.
+        told = any(_PARTIAL.search(exchange.reply) for exchange in history)
+        due = not told or _RECENT.search(question)
+        facts = _facts(_pivot(run.chart, result), as_of if due else None)
         rows = "\n".join(lines[:SPEECH_ROWS])
         shown = (
             f"first {SPEECH_ROWS} of {len(lines)} rows"
@@ -948,7 +1002,7 @@ def _table(chart: Chart, result: QueryResult) -> tuple[str, list[str]]:
 FACT_SERIES = 12  # series described one by one, at most
 
 
-def _facts(pivot: Pivot | None) -> list[str]:
+def _facts(pivot: Pivot | None, as_of: str | None = None) -> list[str]:
     """Things about a result that are easy to get wrong by eye, worked out
     here so the model reads them: which series led over what span, and where
     each started, ended, peaked and bottomed out. Every number is one from
@@ -956,6 +1010,8 @@ def _facts(pivot: Pivot | None) -> list[str]:
     if pivot is None or len(pivot.xs) < 2:
         return []
     facts = []
+    if pivot.ordered and (partial := _partial(pivot.xs[-1], as_of)):
+        facts.append(partial)
     if pivot.ordered and len(pivot.names) > 1:
         for word, pick in (("Highest", max), ("Lowest", min)):
             spans = _spans([(x, pivot.extreme(x, pick)) for x in pivot.xs])
@@ -974,6 +1030,28 @@ def _facts(pivot: Pivot | None) -> list[str]:
             ends = f"starts {first} at {first_x}, ends {last} at {last_x}, {ends}"
         facts.append(f"{name}: {ends}.")
     return facts
+
+
+# A question about the latest period or about a fall, where it matters that
+# the period is incomplete.
+_RECENT = re.compile(
+    r"\b(?:20\d\d|latest|recent|this year|last year|so far|drop|dropp|declin|fell"
+    r"|fall|down|decreas|trend)",
+    re.IGNORECASE,
+)
+
+
+def _partial(last: Any, as_of: str | None) -> str | None:
+    """That the last year along a chart is not a whole one, if the data's
+    version is a date within it. Said as a fact about that point, so the
+    reply need not treat it as a warning about everything."""
+    found = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", as_of or "")
+    if not found or str(last) != found[1] or found[0].endswith("-12-31"):
+        return None
+    return (
+        f"{last} is incomplete: the data runs to {as_of}, so its values are"
+        " lower than a full year's would be."
+    )
 
 
 def _spans(leaders: list[tuple[Any, str | None]]) -> str:

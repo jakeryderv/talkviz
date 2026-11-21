@@ -123,9 +123,6 @@ class Event(BaseModel):
     plan, reply). A stage that needed no model is left out."""
     seconds: dict[str, float] | None = None
     """Assistant only: time spent in each stage."""
-    caveats: list[int] | None = None
-    """Assistant only: the dataset caveats the reply mentions, by number, so
-    later replies in the chat do not repeat them."""
 
 
 def default_path() -> Path:

@@ -163,9 +163,10 @@ examples:
 ```
 
 Answers are only as good as the manifest. Describe each column in plain
-words and state the traps in `caveats`. A reply that brings new results
-mentions the one that matters most, once per chat; after that a caveat comes
-up again only when a question turns on it.
+words and state the traps in `caveats`. The planner always works from them. They are
+shown to the user in a note under each chart, so spoken replies leave them
+out, except when a question asks for a judgement they bear on ("which make
+is safest?").
 
 ## Scoring a model
 
