@@ -722,8 +722,12 @@ only to show the same result another way.
 - create_chart with `parent` when the filter needs rows that chart's result
   does not have ("only brake complaints" on a chart without a component
   column): write the full query, and it too becomes a sub-chart.
-- A sub-chart cannot have sub-charts, and a chart can have 26. You are told
-  when there is no room; then offer a new chart of its own.
+- Filtering a sub-chart further ("only since 2022" while looking at 1a) is
+  also narrow_chart, on that sub-chart, giving only the new filter. It
+  makes a sibling (1b) from the parent's rows with both filters applied.
+- A sub-chart with its own query cannot be filtered into another sub-chart,
+  and a chart can have 26. You are told when there is no room; then offer a
+  new chart of its own.
 - update_chart only when they ask to change the chart itself ("change this
   one to...", "replace it", "rename it", "split it by make"). Send only the
   fields that change.
