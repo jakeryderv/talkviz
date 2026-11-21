@@ -99,8 +99,10 @@ filter can be answered from the rows the chart already has, the sub-chart
 keeps those rows and nothing is totalled again; otherwise it gets a query of
 its own, and its details say which. Changing a chart's query carries through
 to the sub-charts that keep its rows, and marks the others as possibly out of
-date. Sub-charts are one level deep, 26 to a chart; past that, talkviz offers
-a new chart instead. "Change this one" still edits a chart in place.
+date. Sub-charts are one level deep, 26 to a chart: filtering a sub-chart
+makes a sibling (1b from 1a) that keeps the parent's rows with both filters
+applied. Where that cannot be done, talkviz offers a new chart instead.
+"Change this one" still edits a chart in place.
 
 A model you choose runs at its own default effort unless you set one.
 

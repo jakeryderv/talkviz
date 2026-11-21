@@ -215,13 +215,31 @@ class Workspace(BaseModel):
         if current is None:
             raise KeyError(action.chart_id)
         if isinstance(action, NarrowChart):
+            kept = Narrow(where=action.where, top=action.top, by=action.by)
+            if current.parent and current.narrow:
+                # Narrowing a sub-chart that itself keeps rows of its parent
+                # makes a sibling: the parent's rows with both selections, so
+                # sub-charts stay one level deep.
+                both = Narrow(
+                    where=[*current.narrow.where, *kept.where],
+                    top=kept.top or current.narrow.top,
+                    by=kept.by if kept.top else current.narrow.by,
+                )
+                return Chart(
+                    id=self.sub_id(current.parent),
+                    title=action.title,
+                    sql=current.sql,
+                    spec=action.spec or current.spec,
+                    parent=current.parent,
+                    narrow=both,
+                )
             return Chart(
                 id=self.sub_id(current.id),
                 title=action.title,
                 sql=current.sql,
                 spec=action.spec or current.spec,
                 parent=current.id,
-                narrow=Narrow(where=action.where, top=action.top, by=action.by),
+                narrow=kept,
             )
         if isinstance(action, RevertChart):
             wanted = action.revision or current.revision - 1

@@ -154,3 +154,34 @@ def test_a_label_no_chart_has_is_left_to_the_planner(manifest, con):
         router=router,
     )
     assert (turn.shortcut, turn.reply) == (False, "No 1b yet.")
+
+
+def test_filtering_a_sub_chart_makes_a_sibling_with_both_filters(con, manifest):
+    line = {"kind": "line", "x": "month", "y": "total", "series": "category"}
+    parent = Chart.model_validate(
+        {"id": "c1", "title": "Monthly sales", "sql": MONTHLY, "spec": line}
+    )
+    workspace = Workspace(charts=[parent])
+    some = {"column": "category", "values": ["books", "toys"]}
+    workspace.apply(workspace.resolve(_action(narrow(where=[some]))))
+    later = {"op": "narrow_chart", "chart_id": "c1a", "title": "From February"}
+    since = {"where": [{"column": "month", "min": "2"}]}
+    sibling = workspace.resolve(_action(later | since))
+    assert (sibling.id, sibling.parent, sibling.sql) == ("c1b", "c1", MONTHLY)
+    both = sibling.narrow or Narrow()
+    assert [condition.column for condition in both.where] == ["category", "month"]
+    rows = run_chart(con, manifest, workspace, sibling).rows
+    assert {row[:2] for row in rows} == {(2, "books"), (2, "toys"), (3, "books")}
+    # A new top replaces the sub-chart's own; otherwise it is kept.
+    top = workspace.resolve(_action(later | {"top": 1, "by": "total"})).narrow
+    assert top is not None
+    assert (top.top, top.by, len(top.where)) == (1, "total", 1)
+
+
+def test_a_sub_chart_with_its_own_query_still_cannot_be_filtered_into_another():
+    child = PARENT.model_copy(update={"id": "c1a", "parent": "c1"})
+    workspace = Workspace(charts=[PARENT, child])
+    with pytest.raises(NoRoom, match="cannot have sub-charts"):
+        workspace.resolve(
+            _action(narrow() | {"chart_id": "c1a", "top": 1, "by": "total"})
+        )
