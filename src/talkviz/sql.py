@@ -77,6 +77,9 @@ def connect(database: Path) -> duckdb.DuckDBPyConnection:
         # Another open connection to this database already locked it; they
         # share one configuration, so this one is restricted the same way.
         pass
+    except BaseException:
+        con.close()  # not restricted, so not handed out, and not left open
+        raise
     return con
 
 
