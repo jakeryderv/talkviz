@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/jakeryderv/talkviz/compare/v0.3.0...v0.4.0) (2026-11-21)
+
+
+### Features
+
+* filtering a sub-chart makes a sibling with both filters ([#35](https://github.com/jakeryderv/talkviz/issues/35)) ([fb92ecf](https://github.com/jakeryderv/talkviz/commit/fb92ecf78366b33fb579342a4577f07696d396b8))
+* undo a change to a chart, by voice or from a versions menu ([#34](https://github.com/jakeryderv/talkviz/issues/34)) ([10c9130](https://github.com/jakeryderv/talkviz/commit/10c9130712deb54963d8032f6806b3fd7efaaa1a))
+
+
+### Bug Fixes
+
+* follow-ups mean the chart on screen, the router sees series names, and connections are closed ([#32](https://github.com/jakeryderv/talkviz/issues/32)) ([fed18a4](https://github.com/jakeryderv/talkviz/commit/fed18a428dc2f1639c614d588409a9eb04dd326f))
+* say each caveat once, and give the reply model computed facts ([#31](https://github.com/jakeryderv/talkviz/issues/31)) ([8fe777c](https://github.com/jakeryderv/talkviz/commit/8fe777c89971c4f656fed9b4ab62f3a586cdbe89))
+
 ## [0.3.0](https://github.com/jakeryderv/talkviz/compare/v0.2.0...v0.3.0) (2026-11-19)
 
 
