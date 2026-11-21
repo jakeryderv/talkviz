@@ -187,3 +187,16 @@ def test_which_caveat_was_said_is_judged_from_its_words(manifest, con):
         {"actions": [create()]}, "Games lead.\nCaveat 1: Phone orders are missing."
     )
     assert chart(model, manifest, con, []).caveats == [2]
+
+
+def test_undo_is_never_taken_by_the_fast_path(manifest, con):
+    # The router would show the chart again; the planner is asked instead.
+    router = Fixed(Shortcut("show_chart", ("c1",)))
+    for said in ("undo that", "go back to the first version", "put it back how it was"):
+        model = Scripted({"actions": [{"op": "show_chart", "chart_id": "c1"}]})
+        workspace = Workspace(charts=[CHART])
+        take_turn(model, said, manifest, con, workspace, [], router=router)
+        assert len(model.seen) == 1, said
+    model = Scripted()
+    take_turn(model, "show it again", manifest, con, workspace, [], router=router)
+    assert model.seen == []

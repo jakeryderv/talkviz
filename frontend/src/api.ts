@@ -54,6 +54,8 @@ export type Chart = {
   lens: Lens | null;
   /** The kind it is drawn as, when not the spec's own. Saved with the chart. */
   view: Kind | null;
+  /** The definitions it has had, oldest first; the last is the current one. */
+  past?: { revision: number; title: string; at: string }[];
   run: Run | null;
   /** Every way the result can be drawn, the chart's own spec first. */
   views: Spec[];
@@ -156,6 +158,9 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ kind }),
     }),
+  /** Puts a chart back to an earlier revision, as a new one. */
+  revert: (id: string, chartId: string, revision: number) =>
+    request<TurnView>(`/api/chats/${id}/charts/${chartId}/revert`, post({ revision })),
   resetLens: (id: string, chartId: string) =>
     request<void>(`/api/chats/${id}/charts/${chartId}/lens`, { method: "DELETE" }),
   voices: () => request<Voices>("/api/voices"),

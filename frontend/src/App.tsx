@@ -184,6 +184,18 @@ export function App() {
   };
 
   // Puts the whole chart back in view.
+  // Puts a chart back to an earlier version; the feed notes it.
+  const revert = (chartId: string, revision: number) => {
+    if (!view) return;
+    api
+      .revert(view.chat.id, chartId, revision)
+      .then((turn) => {
+        const changed = new Map(turn.charts.map((c) => [c.id, c]));
+        setView((v) => v && { ...v, charts: v.charts.map((c) => changed.get(c.id) ?? c), events: [...v.events, ...turn.events] });
+      })
+      .catch(fail);
+  };
+
   const reset = (chartId: string) => {
     if (!view) return;
     setView((v) => v && { ...v, charts: v.charts.map((c) => (c.id === chartId ? { ...c, lens: null } : c)) });
@@ -225,7 +237,7 @@ export function App() {
     <div className="grid h-full" style={{ gridTemplateColumns: `${chatsHidden ? RAIL : 240}px minmax(0,1fr) ${listHidden ? RAIL : 260}px` }}>
       <Sidebar collapsed={chatsHidden} onCollapse={setChatsHidden} chats={chats} active={view?.chat.id ?? null} source={source} onOpen={(id) => open(id)} onNew={startNew} onDelete={remove} onSettings={() => setSettingsOpen("defaults")} />
       <main ref={main} className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)]" style={{ gridTemplateRows: `minmax(0,1fr) 5px minmax(150px,${feedShare * 100}%)` }}>
-        <Workspace charts={charts} all={view?.charts ?? []} source={source} busy={pending !== null} onAsk={say} onDraw={draw} onReset={reset} onClose={toggle} />
+        <Workspace charts={charts} all={view?.charts ?? []} source={source} busy={pending !== null} onAsk={say} onDraw={draw} onReset={reset} onRevert={revert} onClose={toggle} />
         <div
           role="separator"
           aria-orientation="horizontal"

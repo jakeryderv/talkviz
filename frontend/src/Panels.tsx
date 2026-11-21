@@ -1,4 +1,4 @@
-import { ArrowUp, Box, ChartArea, ChartColumn, ChartColumnStacked, ChartLine, ChartPie, ChartScatter, ChevronDown, Code2, Columns2, Download, Grid3x3, Hash, Keyboard, LayoutGrid, type LucideIcon, Mic, Minus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Search, Settings as SettingsIcon, SlidersHorizontal, Table2, Trash2, X } from "lucide-react";
+import { ArrowUp, Box, ChartArea, ChartColumn, ChartColumnStacked, ChartLine, ChartPie, ChartScatter, ChevronDown, Code2, Columns2, Download, Grid3x3, Hash, History, Keyboard, LayoutGrid, type LucideIcon, Mic, Minus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Search, Settings as SettingsIcon, SlidersHorizontal, Table2, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Chart, Chat, FeedEvent, Kind, Narrow, Run, Source } from "./api";
 import { ChartBody, figure } from "./charts/ChartBody";
@@ -262,6 +262,7 @@ export function Workspace(props: {
   onAsk: (text: string) => void;
   onDraw: (chartId: string, kind: Kind) => void;
   onReset: (chartId: string) => void;
+  onRevert: (chartId: string, revision: number) => void;
   onClose: (chartId: string) => void;
 }) {
   const count = props.charts.length;
@@ -281,6 +282,7 @@ export function Workspace(props: {
           palette={palette(props.all, chart)}
           onDraw={props.onDraw}
           onReset={props.onReset}
+          onRevert={props.onRevert}
           onClose={props.onClose}
         />
       ))}
@@ -299,10 +301,12 @@ function Pane(props: {
   palette: string[] | undefined;
   onDraw: (chartId: string, kind: Kind) => void;
   onReset: (chartId: string) => void;
+  onRevert: (chartId: string, revision: number) => void;
   onClose: (chartId: string) => void;
 }) {
   const { chart, source, beside } = props;
   const [details, setDetails] = useState(false);
+  const past = chart.past ?? [];
   const kind = chart.view ?? chart.spec.kind;
   const run = chart.run;
   const spec = chart.views.find((view) => view.kind === kind) ?? chart.spec;
@@ -339,7 +343,6 @@ function Pane(props: {
           <p className="truncate text-xs text-ink-muted">
             {KINDS[spec.kind]}
             {run && ` · ${number(run.rows.length)} ${run.rows.length === 1 ? "row" : "rows"} · data as of ${run.data_version}`}
-            {chart.revision > 1 && ` · revision ${chart.revision}`}
             {fig?.note && ` · ${fig.note}`}
             {chart.lens && fig?.note && (
               <button type="button" onClick={() => props.onReset(chart.id)} className="ml-2 cursor-pointer text-primary-bright hover:underline">
@@ -363,6 +366,24 @@ function Pane(props: {
               checked: view.kind === spec.kind,
               onSelect: () => props.onDraw(chart.id, view.kind),
             }))}
+          />
+        )}
+        {past.length > 1 && (
+          <Menu
+            name="Versions of this chart"
+            label={
+              <>
+                <History size={13} aria-hidden />v{chart.revision}
+              </>
+            }
+            items={past
+              .map((p) => ({
+                key: String(p.revision),
+                label: `v${p.revision} · ${p.title} · ${clock(p.at)}`,
+                checked: p.revision === chart.revision,
+                onSelect: () => p.revision !== chart.revision && props.onRevert(chart.id, p.revision),
+              }))
+              .reverse()}
           />
         )}
         <Menu
@@ -419,7 +440,7 @@ function unverified(event: FeedEvent): string {
   return `${why}, so it was left out. The chart and its numbers are unaffected.`;
 }
 
-const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", show_chart: "Showing", set_view: "Redrawn", set_lens: "Adjusted", narrow_chart: "Filtered", discuss: "About" };
+const OPS: Record<string, string> = { create_chart: "Created", update_chart: "Updated", revert_chart: "Restored", show_chart: "Showing", set_view: "Redrawn", set_lens: "Adjusted", narrow_chart: "Filtered", discuss: "About" };
 
 export function Feed(props: {
   /** The stage the turn in progress has reached, if known. */

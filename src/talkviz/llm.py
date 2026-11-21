@@ -45,6 +45,7 @@ from talkviz.workspace import (
     CreateChart,
     Lens,
     NarrowChart,
+    NoPast,
     NoRoom,
     SetLens,
     SetView,
@@ -425,12 +426,20 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
         where = f"Action {number} ({action.op})"
         # Charts made earlier in this plan have taken the next ids.
         made = [run.chart for run in runs if run.op in ("create_chart", "narrow_chart")]
-        ahead = Workspace(charts=[*deps.workspace.charts, *made])
+        ahead = Workspace(
+            charts=[*deps.workspace.charts, *made], past=deps.workspace.past
+        )
         try:
             chart = ahead.resolve(action)
         except KeyError as missing:
             known = ", ".join(c.id for c in deps.workspace.charts) or "none yet"
             problems.append(f"{where}: no chart {missing.args[0]!r}. Charts: {known}.")
+            continue
+        except NoPast as none:
+            told.append(str(none))
+            problems.append(
+                f"{where}: {none} Return no actions and a note telling the user that."
+            )
             continue
         except NoRoom as full:
             told.append(str(full))
@@ -511,7 +520,8 @@ def _validate_plan(ctx: RunContext[PlanDeps], output: Plan) -> Plan:
             view = None if chart.spec.kind == current.spec.kind else chart.spec.kind
             chart, op = current.model_copy(update={"view": view}), "set_view"
         note = ""
-        if op == "update_chart" and current is not None and current.lens is not None:
+        redefined = op in ("update_chart", "revert_chart")
+        if redefined and current is not None and current.lens is not None:
             note = "The chart is back to its full view: no zoom, no series hidden."
         runs.append(ChartRun(chart, result, op, note))
     deps.problems = told
@@ -729,6 +739,10 @@ only to show the same result another way.
   `reset` everything. The data is unchanged. Use this for "zoom in on 2020
   to 2024", "hide Ford", "zoom out", "show everything again". Use
   update_chart when they want the data itself narrowed ("only since 2020").
+- revert_chart when they ask to undo a change to a chart or put it back how
+  it was ("undo that", "go back", "I liked it better before"). It restores
+  the chart's previous definition; give `revision` only if they name one.
+  Do not rewrite the old query yourself with update_chart.
 - discuss when they ask a question that an existing chart's result already
   answers, and want it answered in words: "what does this reveal", "what
   stands out", "which make is highest in 2020", "summarise that". Give one
@@ -774,7 +788,7 @@ def _caveat_rule(manifest: Manifest, said: set[int], fresh: bool) -> str:
 
 
 # Turns that bring results the user has not seen, where a caveat may be due.
-_NEW_RESULTS = ("create_chart", "update_chart", "narrow_chart")
+_NEW_RESULTS = ("create_chart", "update_chart", "narrow_chart", "revert_chart")
 
 
 def _fresh(planned: Planned) -> bool:
@@ -1044,6 +1058,7 @@ def _not_always(pivot: Pivot, name: str) -> str | None:
 _DID = {
     "create_chart": "created",
     "update_chart": "updated",
+    "revert_chart": "put back to an earlier version, undoing the last change",
     "show_chart": "shown",
     "set_view": "redrawn",
     "set_lens": "zoomed or series hidden",

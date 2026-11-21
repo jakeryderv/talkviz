@@ -308,3 +308,61 @@ def test_the_chart_on_screen_is_the_one_a_follow_up_means(source):
     said = {"text": "which is lowest", "shown": ["c1", "nonsense"]}
     assert app.post(f"/api/chats/{chat}/turns", json=said).status_code == 200
     assert "On screen now: c1, 'Sales by category'" in model.sent(4)
+
+
+BY_MONTH = (
+    "SELECT month(ordered) AS category, sum(amount) AS total FROM orders GROUP BY 1"
+)
+
+
+def test_undo_puts_a_chart_back_as_a_new_revision(source):
+    model = Scripted(
+        {"actions": [create()]},
+        "Games lead at 105.",
+        {"actions": [{"op": "update_chart", "chart_id": "c1", "sql": BY_MONTH}]},
+        "January leads.",
+        {"actions": [{"op": "revert_chart", "chart_id": "c1"}]},
+        "Sales by category is back as it was. Games lead at 105.",
+    )
+    app = TestClient(create_app(model=model, store=Store()))
+    chat = app.post("/api/chats", json={}).json()["id"]
+    for text in ("sales by category?", "by month instead", "undo that"):
+        turn = app.post(f"/api/chats/{chat}/turns", json={"text": text}).json()
+    [chart] = turn["charts"]
+    assert (chart["revision"], chart["sql"]) == (3, create()["sql"])
+    assert [p["revision"] for p in chart["past"]] == [1, 2, 3]
+    assert turn["events"][1]["op"] == "revert_chart"
+    told = getattr(model.seen[4][0], "instructions", "")
+    assert "revert_chart when they ask to undo" in str(told)
+
+
+def test_a_chart_can_be_put_back_to_a_named_revision_without_a_model(source):
+    model = Scripted(
+        {"actions": [create()]},
+        "Games lead at 105.",
+        {"actions": [{"op": "update_chart", "chart_id": "c1", "sql": BY_MONTH}]},
+        "January leads.",
+    )
+    app = TestClient(create_app(model=model, store=Store()))
+    chat = app.post("/api/chats", json={}).json()["id"]
+    for text in ("sales by category?", "by month instead"):
+        app.post(f"/api/chats/{chat}/turns", json={"text": text})
+    back = app.post(f"/api/chats/{chat}/charts/c1/revert", json={"revision": 1})
+    assert back.status_code == 200, back.text
+    [chart] = back.json()["charts"]
+    assert (chart["revision"], chart["sql"]) == (3, create()["sql"])
+    assert {row[0] for row in chart["run"]["rows"]} == {"games", "books", "toys"}
+    assert back.json()["events"][0]["op"] == "revert_chart"
+    # Going back again returns to the version before that: the monthly one.
+    again = app.post(f"/api/chats/{chat}/charts/c1/revert", json={}).json()
+    assert (again["charts"][0]["revision"], again["charts"][0]["sql"]) == (4, BY_MONTH)
+
+
+def test_a_chart_with_one_version_has_nothing_to_go_back_to(source):
+    app = client({"actions": [create()]}, "Games lead at 105.")
+    chat = app.post("/api/chats", json={}).json()["id"]
+    app.post(f"/api/chats/{chat}/turns", json={"text": "sales by category?"})
+    back = app.post(f"/api/chats/{chat}/charts/c1/revert", json={})
+    assert back.status_code == 409
+    assert "no earlier version" in back.json()["detail"]
+    assert app.post(f"/api/chats/{chat}/charts/c9/revert", json={}).status_code == 404

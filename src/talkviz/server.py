@@ -4,7 +4,7 @@ built interface served from talkviz/web.
 
 import os
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
@@ -23,7 +23,7 @@ from talkviz.sources import Source, list_sources, load_source
 from talkviz.sql import QueryRejected, QueryResult, ResultColumn
 from talkviz.store import Chat, Event, Run, Store
 from talkviz.turn import Turn, take_turn
-from talkviz.workspace import Chart, Workspace, run_chart
+from talkviz.workspace import Chart, NoPast, Past, RevertChart, Workspace, run_chart
 
 WEB = Path(__file__).parent / "web"
 CATALOG_URL = "https://openrouter.ai/api/v1/models"
@@ -42,12 +42,20 @@ class SourceInfo(BaseModel):
     """Questions from the manifest, to suggest in a new chat."""
 
 
+class PastView(BaseModel):
+    revision: int
+    title: str
+    at: str
+
+
 class ChartView(Chart):
     """A chart with its most recent result."""
 
     run: Run | None
     views: list[ChartSpec]
     """Every way the result can be drawn, the chart's own spec first."""
+    past: list[PastView] = Field(default_factory=list)
+    """The definitions it has had, oldest first, the last being the current."""
 
 
 class ModelInfo(BaseModel):
@@ -102,6 +110,11 @@ class Say(BaseModel):
     shown: list[str] = Field(default_factory=list, max_length=8)
     """The charts on screen when it was said, the last being the latest added.
     "It" and requests that name no chart are taken to mean that one."""
+
+
+class Revert(BaseModel):
+    revision: int | None = None
+    """The revision to go back to; the one before the current if left out."""
 
 
 class TurnView(BaseModel):
@@ -296,7 +309,9 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
         model, speaker, router = engines(chosen)
         source = _source(chat)
         history = store.events(chat.id)
-        workspace = Workspace(charts=store.charts(chat.id))
+        workspace = Workspace(
+            charts=store.charts(chat.id), past=store.revisions(chat.id)
+        )
         events = [store.add_event(chat.id, "user", text=body.text)]
         if not history:
             chat = chat.model_copy(update={"title": _title(body.text)})
@@ -351,19 +366,8 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
                     view=run.chart.view if run.op == "set_view" else None,
                 )
             )
-        # Sub-charts that keep rows of a chart this turn changed follow it.
-        changed = {run.chart.id for run in taken.runs if run.op == "update_chart"}
-        for child in workspace.charts:
-            if child.narrow and child.parent in changed and child not in touched:
-                child = child.model_copy(update={"sql": workspace.source(child)})
-                try:
-                    with source.connect() as con:
-                        result = run_chart(con, source.manifest, workspace, child)
-                except (QueryRejected, ValueError):
-                    continue  # it no longer applies; it says so when opened
-                store.save_chart(chat.id, child)
-                store.save_run(chat.id, child, result, version)
-                touched.append(child)
+        changed = {run.chart.id for run in taken.runs if run.op in _REDEFINES}
+        touched += _follow(store, chat, source, workspace, changed, touched, version)
         events.append(
             store.add_event(
                 chat.id,
@@ -400,6 +404,51 @@ def create_app(model: Model | None = None, store: Store | None = None) -> FastAP
             raise HTTPException(409, f"This chart no longer runs: {error}") from error
         run = store.save_run(chat.id, chart, result, version)
         return _view(chart, run)
+
+    @app.post("/api/chats/{chat_id}/charts/{chart_id}/revert")
+    def revert(chart_id: str, body: Revert, chat: Current, store: Stored) -> TurnView:
+        """Put a chart back to an earlier definition, as a new revision, and
+        note it in the feed. No model is involved."""
+        workspace = Workspace(
+            charts=store.charts(chat.id), past=store.revisions(chat.id)
+        )
+        try:
+            chart = workspace.resolve(
+                RevertChart(
+                    op="revert_chart", chart_id=chart_id, revision=body.revision
+                )
+            )
+        except KeyError:
+            raise HTTPException(404, "No such chart.") from None
+        except NoPast as none:
+            raise HTTPException(409, str(none)) from none
+        source = _source(chat)
+        try:
+            with source.connect() as con:
+                result = run_chart(con, source.manifest, workspace, chart)
+                version = source.data_version(con)
+        except (QueryRejected, ValueError) as error:
+            raise HTTPException(409, f"That version no longer runs: {error}") from error
+        workspace.apply(chart)
+        store.save_chart(chat.id, chart)
+        saved = store.save_run(chat.id, chart, result, version)
+        event = store.add_event(
+            chat.id,
+            "chart",
+            op="revert_chart",
+            chart_id=chart.id,
+            revision=chart.revision,
+            title=chart.title,
+            run_id=saved.id,
+        )
+        touched = [chart]
+        touched += _follow(store, chat, source, workspace, {chart.id}, touched, version)
+        return TurnView(
+            chat=chat,
+            events=[event],
+            charts=_views(store, chat.id, touched),
+            shown=[chart.id],
+        )
 
     @app.delete("/api/chats/{chat_id}/charts/{chart_id}/lens", status_code=204)
     def reset_lens(chart_id: str, chat: Current, store: Stored) -> None:
@@ -449,21 +498,57 @@ def _source_info(source: Source) -> SourceInfo:
     )
 
 
+# Actions that give a chart a new definition, which its sub-charts follow.
+_REDEFINES = ("update_chart", "revert_chart")
+
+
+def _follow(
+    store: Store,
+    chat: Chat,
+    source: Source,
+    workspace: Workspace,
+    changed: set[str],
+    touched: list[Chart],
+    version: str,
+) -> list[Chart]:
+    """Re-run the sub-charts that keep rows of a chart in `changed`, so they
+    follow it. Returns those that were, leaving out any already in `touched`."""
+    followed = []
+    for child in workspace.charts:
+        if child.narrow and child.parent in changed and child not in touched:
+            child = child.model_copy(update={"sql": workspace.source(child)})
+            try:
+                with source.connect() as con:
+                    result = run_chart(con, source.manifest, workspace, child)
+            except (QueryRejected, ValueError):
+                continue  # it no longer applies; it says so when opened
+            store.save_chart(chat.id, child)
+            store.save_run(chat.id, child, result, version)
+            followed.append(child)
+    return followed
+
+
 def _views(store: Store, chat_id: str, charts: list[Chart]) -> list[ChartView]:
     runs = store.latest_runs(chat_id)
-    return [_view(chart, runs.get(chart.id)) for chart in charts]
+    past = store.revisions(chat_id) if charts else {}
+    return [
+        _view(chart, runs.get(chart.id), past.get(chart.id, [])) for chart in charts
+    ]
 
 
-def _view(chart: Chart, run: Run | None) -> ChartView:
+def _view(chart: Chart, run: Run | None, past: Sequence[Past] = ()) -> ChartView:
+    had = [PastView(revision=p.revision, title=p.title, at=p.at) for p in past]
     if run is None:
-        return ChartView(**chart.model_dump(), run=None, views=[chart.spec])
+        return ChartView(**chart.model_dump(), run=None, views=[chart.spec], past=had)
     result = QueryResult(
         columns=[ResultColumn(c.name, c.type) for c in run.columns],
         rows=[tuple(row) for row in run.rows],
         truncated=run.truncated,
         seconds=run.seconds,
     )
-    return ChartView(**chart.model_dump(), run=run, views=views(chart.spec, result))
+    return ChartView(
+        **chart.model_dump(), run=run, views=views(chart.spec, result), past=had
+    )
 
 
 def _seen(charts: list[ChartView]) -> dict[str, route.Seen]:
